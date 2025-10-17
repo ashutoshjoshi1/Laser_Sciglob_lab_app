@@ -555,6 +555,8 @@ class SpectroApp(tk.Tk):
         nb.add(self.analysis_tab, text="Analysis")
         nb.add(self.setup_tab, text="Setup")
 
+        self.nb = nb  # keep reference used elsewhere
+
         self._build_live_tab()
         self._build_measure_tab()
         self._build_analysis_tab()
@@ -615,15 +617,23 @@ class SpectroApp(tk.Tk):
             pass
 
     def _clear_analysis_notebook(self) -> None:
+        # Remove previous tab contents and canvases
         if getattr(self, "analysis_canvases", None):
-            for canvas in self.analysis_canvases:
+            for entry in getattr(self, "analysis_canvases", []):
                 try:
-                    canvas.get_tk_widget().destroy()
+                    # entry might be a tuple (canvas_widget, scrollbars) or a canvas
+                    if hasattr(entry, 'get_tk_widget'):
+                        entry.get_tk_widget().destroy()
+                    elif isinstance(entry, tk.Widget):
+                        entry.destroy()
                 except Exception:
                     pass
         if getattr(self, "analysis_notebook", None):
             for tab_id in self.analysis_notebook.tabs():
-                self.analysis_notebook.forget(tab_id)
+                try:
+                    self.analysis_notebook.forget(tab_id)
+                except Exception:
+                    pass
         self.analysis_canvases = []
 
     def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
@@ -651,15 +661,18 @@ class SpectroApp(tk.Tk):
             status += f" in {self.results_folder}"
         self.analysis_status_var.set(status)
 
-        for artifact in self.analysis_artifacts:
-            frame = ttk.Frame(self.analysis_notebook)
-            self.analysis_notebook.add(frame, text=artifact.name)
-            canvas = FigureCanvasTkAgg(artifact.figure, master=frame)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill="both", expand=True)
-            NavigationToolbar2Tk(canvas, frame)
-            self.analysis_canvases.append(canvas)
+        # If artifacts (figures) are available, show them as tabs (legacy support)
+        if self.analysis_artifacts:
+            for artifact in self.analysis_artifacts:
+                frame = ttk.Frame(self.analysis_notebook)
+                self.analysis_notebook.add(frame, text=artifact.name)
+                canvas = FigureCanvasTkAgg(artifact.figure, master=frame)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill="both", expand=True)
+                NavigationToolbar2Tk(canvas, frame)
+                self.analysis_canvases.append(canvas)
 
+        # Update summary text
         summary_text = "\n".join(self.analysis_summary_lines) if self.analysis_summary_lines else ""
         self.analysis_text.configure(state="normal")
         self.analysis_text.delete("1.0", "end")
@@ -1466,8 +1479,8 @@ class SpectroApp(tk.Tk):
             plot_path = self._generate_lsf_comparison_plot(df, plots_folder, sn, timestamp)
             if plot_path: plot_paths.append(plot_path)
 
-            # Update analysis tab with results
-            self._update_analysis_display(plot_paths, csv_path)
+            # Update analysis tab with results (tabs format)
+            self._update_analysis_display_tabs(plot_paths, csv_path)
 
             print(f"✅ Analysis complete! Generated {len(plot_paths)} plots")
             return plot_paths
@@ -1994,41 +2007,90 @@ class SpectroApp(tk.Tk):
             print(f"❌ Error generating LSF comparison plot: {e}")
             return None
 
-    def _update_analysis_display(self, plot_paths: List[str], csv_path: str):
-        """Update analysis tab with generated plots in dropdown format."""
+    def _update_analysis_display_tabs(self, plot_paths: List[str], csv_path: str):
+        """Update analysis tab by creating a separate notebook tab for each generated plot image."""
         try:
-            # Clear existing tabs if notebook exists
-            if hasattr(self, 'analysis_notebook'):
-                for tab in self.analysis_notebook.tabs():
-                    self.analysis_notebook.forget(tab)
+            # Ensure we have an analysis notebook reference (created by the analysis tab builder)
+            if not hasattr(self, 'analysis_notebook'):
+                # If not present, create one inside self.analysis_tab
+                self.analysis_notebook = ttk.Notebook(self.analysis_tab)
+                self.analysis_notebook.pack(fill="both", expand=True)
 
-            # Clear existing canvases
-            for canvas in getattr(self, 'analysis_canvases', []):
-                try:
-                    canvas.get_tk_widget().destroy()
-                except:
-                    pass
-            self.analysis_canvases = []
+            # Clear existing tabs & canvases
+            self._clear_analysis_notebook()
 
             if not plot_paths:
-                # No plots generated
                 if hasattr(self, 'analysis_status_var'):
                     self.analysis_status_var.set("No plots were generated. Check measurement data.")
                 return
 
-            # Create main tab with dropdown selector if notebook exists
-            if hasattr(self, 'analysis_notebook'):
-                main_tab = ttk.Frame(self.analysis_notebook)
-                self.analysis_notebook.add(main_tab, text="Characterization Plots")
+            # Iterate and create one tab per plot image
+            plot_names = []
+            for p in plot_paths:
+                display_name = os.path.basename(p).replace('.png', '')
+                plot_names.append(display_name)
 
-                # Top frame for plot selector
-                selector_frame = ttk.Frame(main_tab)
-                selector_frame.pack(fill="x", padx=10, pady=10)
+                frame = ttk.Frame(self.analysis_notebook)
+                self.analysis_notebook.add(frame, text=display_name)
 
-                ttk.Label(selector_frame, text="Select Plot:", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=(0, 10))
+                # Load image into this tab's frame
+                try:
+                    from PIL import Image, ImageTk
+                    img = Image.open(p)
+                    # Resize for display while keeping original available for scroll
+                    max_w, max_h = 1100, 750
+                    if img.width > max_w or img.height > max_h:
+                        try:
+                            resample = Image.Resampling.LANCZOS
+                        except AttributeError:
+                            resample = Image.LANCZOS
+                        img_thumb = img.copy()
+                        img_thumb.thumbnail((max_w, max_h), resample)
+                    else:
+                        img_thumb = img
 
-                # Create dropdown with plot names
-                plot_names = []
+                    photo = ImageTk.PhotoImage(img_thumb)
+
+                    # Create canvas + scrollbars so user can view large images
+                    canvas = tk.Canvas(frame, bg='white')
+                    vsb = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+                    hsb = ttk.Scrollbar(frame, orient="horizontal", command=canvas.xview)
+                    canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+                    vsb.pack(side="right", fill="y")
+                    hsb.pack(side="bottom", fill="x")
+                    canvas.pack(side="left", fill="both", expand=True)
+
+                    # Place the image
+                    canvas.create_image(0, 0, anchor="nw", image=photo)
+                    canvas.image = photo  # keep reference
+                    # Set the scroll region to the image size
+                    try:
+                        canvas.configure(scrollregion=(0, 0, img_thumb.width, img_thumb.height))
+                    except Exception:
+                        canvas.configure(scrollregion=canvas.bbox("all"))
+
+                    # Save original file path reference for potential export/use
+                    if not hasattr(self, 'analysis_canvases'):
+                        self.analysis_canvases = []
+                    self.analysis_canvases.append(canvas)
+
+                except ImportError:
+                    ttk.Label(frame, text=f"Plot saved to:\n{p}\n\n(Install Pillow to view plots in GUI)", justify="center").pack(expand=True)
+                except Exception as e:
+                    ttk.Label(frame, text=f"Error loading plot {p}:\n{e}", justify="center").pack(expand=True)
+
+            # Update status
+            if hasattr(self, 'analysis_status_var'):
+                self.analysis_status_var.set(f"Generated {len(plot_paths)} characterization plots from {os.path.basename(csv_path)}")
+
+            # Update summary text area (descriptions)
+            if hasattr(self, 'analysis_text'):
+                summary_text = f"Analysis completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                summary_text += f"Data source: {os.path.basename(csv_path)}\n"
+                summary_text += f"Generated plots: {len(plot_paths)}\n\n"
+                summary_text += "Available Characterization Plots:\n\n"
+
                 plot_descriptions = {
                     "Normalized_Laser_Plot": "1. Normalized Line Spread Functions (LSFs)",
                     "OOR_640nm_Plot": "2. Dark-Corrected 640 nm Measurements (Out-of-Range)",
@@ -2039,87 +2101,45 @@ class SpectroApp(tk.Tk):
                     "A2_A3_vs_Wavelength": "7. Slit Function Parameters vs Wavelength",
                     "Spectral_Resolution_with_wavelength": "8. Spectral Resolution vs Wavelength",
                     "Slit_Functions": "9. Modeled Slit Functions",
-                    "Overlapped_LSF_Comparison": "10. Overlaid Normalized LSFs Comparison",
-                    "Overlapped_LSF_Lasers_HgAr": "10. Overlaid Normalized LSFs Comparison"
+                    "Overlapped_LSF_Lasers_HgAr": "10. Overlaid Normalized LSFs Comparison",
+                    "Overlapped_LSF_Comparison": "10. Overlaid Normalized LSFs Comparison"
                 }
 
-                for plot_path in plot_paths:
-                    plot_filename = os.path.basename(plot_path).replace('.png', '')
-                    # Extract plot type from filename
-                    plot_type = None
-                    for key in plot_descriptions.keys():
-                        if key in plot_filename:
-                            plot_type = key
+                for name in plot_names:
+                    # try to match to known keys
+                    desc = None
+                    for key, d in plot_descriptions.items():
+                        if key in name:
+                            desc = d
                             break
-
-                    if plot_type:
-                        display_name = plot_descriptions[plot_type]
-                    else:
-                        display_name = plot_filename
-
-                    plot_names.append(display_name)
-
-                # Store plot paths for reference
-                self.current_plot_paths = plot_paths
-                self.current_plot_names = plot_names
-
-                # Dropdown selector
-                self.plot_selector = ttk.Combobox(selector_frame, values=plot_names, state="readonly", width=60)
-                self.plot_selector.pack(side="left", padx=(0, 10))
-                if plot_names:
-                    self.plot_selector.set(plot_names[0])
-
-                # Bind selection event
-                self.plot_selector.bind("<<ComboboxSelected>>", self._on_plot_selected)
-
-                # Frame for plot display
-                self.plot_display_frame = ttk.Frame(main_tab)
-                self.plot_display_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-                # Load first plot
-                if plot_paths:
-                    self._load_plot_in_display(plot_paths[0])
-
-            # Update status
-            if hasattr(self, 'analysis_status_var'):
-                self.analysis_status_var.set(f"Generated {len(plot_paths)} characterization plots from {os.path.basename(csv_path)}")
-
-            # Update summary text
-            if hasattr(self, 'analysis_text'):
-                summary_text = f"Analysis completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                summary_text += f"Data source: {os.path.basename(csv_path)}\n"
-                summary_text += f"Generated plots: {len(plot_paths)}\n\n"
-                summary_text += "Available Characterization Plots:\n\n"
-
-                for i, plot_name in enumerate(getattr(self, 'current_plot_names', []), 1):
-                    summary_text += f"{plot_name}\n"
-
-                    # Add descriptions for each plot type
-                    if "Normalized Line Spread Functions" in plot_name:
-                        summary_text += "   → Shows the fundamental response of the spectrometer to monochromatic sources\n\n"
-                    elif "640 nm Measurements" in plot_name:
-                        summary_text += "   → Characterizes stray light from out-of-range wavelengths\n\n"
-                    elif "Hg-Ar Lamp Spectrum" in plot_name:
-                        summary_text += "   → Wavelength calibration using known Mercury-Argon emission lines\n\n"
-                    elif "Stray Light Distribution" in plot_name:
-                        summary_text += "   → Visualizes how light scatters between pixels\n\n"
-                    elif "Dispersion Fit" in plot_name:
-                        summary_text += "   → Shows pixel-to-wavelength mapping accuracy\n\n"
-                    elif "Slit Function Parameters" in plot_name:
-                        summary_text += "   → Width and shape parameters vs wavelength\n\n"
-                    elif "Spectral Resolution" in plot_name:
-                        summary_text += "   → Resolution performance compared to reference instruments\n\n"
-                    elif "Modeled Slit Functions" in plot_name:
-                        summary_text += "   → Theoretical slit function shapes at different wavelengths\n\n"
-                    elif "Overlaid Normalized LSFs" in plot_name:
-                        summary_text += "   → Comparison of measured LSFs from lasers and lamp sources\n\n"
+                    summary_text += f"{desc or name}\n"
+                    if desc:
+                        # add short help lines
+                        if "Normalized Line Spread Functions" in d:
+                            summary_text += "   → Shows the fundamental response of the spectrometer to monochromatic sources\n\n"
+                        elif "640 nm Measurements" in d:
+                            summary_text += "   → Characterizes stray light from out-of-range wavelengths\n\n"
+                        elif "Hg-Ar Lamp Spectrum" in d:
+                            summary_text += "   → Wavelength calibration using known Mercury-Argon emission lines\n\n"
+                        elif "Stray Light Distribution" in d:
+                            summary_text += "   → Visualizes how light scatters between pixels\n\n"
+                        elif "Dispersion Fit" in d:
+                            summary_text += "   → Shows pixel-to-wavelength mapping accuracy\n\n"
+                        elif "Slit Function Parameters" in d:
+                            summary_text += "   → Width and shape parameters vs wavelength\n\n"
+                        elif "Spectral Resolution" in d:
+                            summary_text += "   → Resolution performance compared to reference instruments\n\n"
+                        elif "Modeled Slit Functions" in d:
+                            summary_text += "   → Theoretical slit function shapes at different wavelengths\n\n"
+                        elif "Overlaid Normalized LSFs" in d:
+                            summary_text += "   → Comparison of measured LSFs from lasers and lamp sources\n\n"
 
                 self.analysis_text.configure(state="normal")
                 self.analysis_text.delete("1.0", "end")
                 self.analysis_text.insert("1.0", summary_text)
                 self.analysis_text.configure(state="disabled")
 
-            # Enable buttons
+            # Enable export/open buttons
             if hasattr(self, 'export_plots_btn'):
                 self.export_plots_btn.state(["!disabled"])
             if hasattr(self, 'open_folder_btn'):
@@ -2130,80 +2150,70 @@ class SpectroApp(tk.Tk):
                 self.nb.select(self.analysis_tab)
 
         except Exception as e:
-            print(f"Error updating analysis display: {e}")
+            print(f"Error updating analysis display (tabs): {e}")
 
+    # Deprecated/compatibility placeholder (no dropdown in newer UI)
     def _on_plot_selected(self, event=None):
-        """Handle plot selection from dropdown."""
-        try:
-            if hasattr(self, 'plot_selector') and hasattr(self, 'current_plot_paths'):
-                selected_index = self.plot_selector.current()
-                if 0 <= selected_index < len(self.current_plot_paths):
-                    plot_path = self.current_plot_paths[selected_index]
-                    self._load_plot_in_display(plot_path)
-        except Exception as e:
-            print(f"Error selecting plot: {e}")
+        """No-op: dropdown removed in favor of tabbed plot display."""
+        pass
 
-    def _load_plot_in_display(self, plot_path: str):
-        """Load and display a plot in the analysis tab."""
+    # Keep a helper to load a single plot into an arbitrary frame if needed elsewhere
+    def _load_plot_into_frame(self, parent_frame: ttk.Frame, plot_path: str):
+        """Load a single PNG plot into the given frame (scrollable)."""
         try:
-            # Clear existing display
-            for widget in self.plot_display_frame.winfo_children():
-                widget.destroy()
+            for w in parent_frame.winfo_children():
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
 
             if not os.path.exists(plot_path):
-                ttk.Label(self.plot_display_frame, text=f"Plot file not found: {plot_path}").pack(expand=True)
+                ttk.Label(parent_frame, text=f"Plot file not found: {plot_path}").pack(expand=True)
                 return
 
             try:
                 from PIL import Image, ImageTk
-
-                # Load and resize image
                 img = Image.open(plot_path)
-                # Resize if too large
-                if img.width > 1000 or img.height > 700:
+                max_w, max_h = 1100, 750
+                if img.width > max_w or img.height > max_h:
                     try:
                         resample = Image.Resampling.LANCZOS
                     except AttributeError:
                         resample = Image.LANCZOS
-                    img.thumbnail((1000, 700), resample)
+                    img_thumb = img.copy()
+                    img_thumb.thumbnail((max_w, max_h), resample)
+                else:
+                    img_thumb = img
 
-                photo = ImageTk.PhotoImage(img)
+                photo = ImageTk.PhotoImage(img_thumb)
 
-                # Create scrollable canvas
-                canvas = tk.Canvas(self.plot_display_frame, bg='white')
-                scrollbar_v = ttk.Scrollbar(self.plot_display_frame, orient="vertical", command=canvas.yview)
-                scrollbar_h = ttk.Scrollbar(self.plot_display_frame, orient="horizontal", command=canvas.xview)
-                canvas.configure(yscrollcommand=scrollbar_v.set, xscrollcommand=scrollbar_h.set)
+                canvas = tk.Canvas(parent_frame, bg='white')
+                vsb = ttk.Scrollbar(parent_frame, orient="vertical", command=canvas.yview)
+                hsb = ttk.Scrollbar(parent_frame, orient="horizontal", command=canvas.xview)
+                canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
-                # Pack scrollbars and canvas
-                scrollbar_v.pack(side="right", fill="y")
-                scrollbar_h.pack(side="bottom", fill="x")
+                vsb.pack(side="right", fill="y")
+                hsb.pack(side="bottom", fill="x")
                 canvas.pack(side="left", fill="both", expand=True)
 
-                # Add image to canvas
                 canvas.create_image(0, 0, anchor="nw", image=photo)
-                canvas.configure(scrollregion=canvas.bbox("all"))
-
-                # Keep reference to prevent garbage collection
                 canvas.image = photo
-
-                # Add to canvases list for cleanup
-                if not hasattr(self, 'analysis_canvases'):
-                    self.analysis_canvases = []
-                self.analysis_canvases.append(canvas)
+                try:
+                    canvas.configure(scrollregion=(0, 0, img_thumb.width, img_thumb.height))
+                except Exception:
+                    canvas.configure(scrollregion=canvas.bbox("all"))
 
             except ImportError:
-                # Fallback if PIL not available
-                ttk.Label(self.plot_display_frame,
+                ttk.Label(parent_frame,
                          text=f"Plot saved to:\n{plot_path}\n\n(Install Pillow to view plots in GUI)",
                          justify="center").pack(expand=True)
             except Exception as e:
-                ttk.Label(self.plot_display_frame,
+                ttk.Label(parent_frame,
                          text=f"Error loading plot:\n{e}",
                          justify="center").pack(expand=True)
 
         except Exception as e:
-            print(f"Error loading plot display: {e}")
+            print(f"Error loading plot into frame: {e}")
 
     def _set_window_icon(self):
         """Set the window and taskbar icon."""
@@ -2358,6 +2368,28 @@ class SpectroApp(tk.Tk):
                 raise
 
     def export_analysis_plots(self):
+        if not self.analysis_artifacts and not getattr(self, "results_folder", None):
+            # If artifacts aren't available but plots are on disk, allow user to copy them
+            folder = filedialog.askdirectory(title="Select folder for exported plots")
+            if not folder:
+                return
+            # Try copying from results_folder if available
+            try:
+                src_folder = self.results_folder or ""
+                if not src_folder:
+                    messagebox.showinfo("Export Plots", "No plots available to export.")
+                    return
+                for fn in os.listdir(src_folder):
+                    src = os.path.join(src_folder, fn)
+                    if os.path.isfile(src) and fn.lower().endswith(".png"):
+                        dst = os.path.join(folder, fn)
+                        with open(src, "rb") as rf, open(dst, "wb") as wf:
+                            wf.write(rf.read())
+                messagebox.showinfo("Export Plots", f"Exported plots to {folder}")
+            except Exception as exc:
+                self._post_error("Export Plots", exc)
+            return
+
         if not self.analysis_artifacts:
             return
         folder = filedialog.askdirectory(title="Select folder for exported plots")

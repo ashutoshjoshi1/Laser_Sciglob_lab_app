@@ -115,7 +115,7 @@ IB_REGION_HALF = 2
 
 
 # ===================================================
-# ============== Utility / Data Classes =============
+# ============== Utility / Data Classes ============
 # ===================================================
 
 @dataclass
@@ -149,7 +149,7 @@ class MeasurementData:
 
 
 # ===================================================
-# ============== Device Control Helpers =============
+# ============== Device Control Helpers ============
 # ===================================================
 
 class SerialDevice:
@@ -221,7 +221,6 @@ class SerialDevice:
             return ""
 
 
-
 class LaserController:
     """Encapsulate OBIS (multi-channel), CUBE (377), and Relay (532/517/Hg-Ar) behavior."""
     def __init__(self):
@@ -252,7 +251,6 @@ class LaserController:
                 try: self.relay.write_line(f"R{ch}R")
                 except: pass
         except: pass
-
 
     def configure_ports(self, ports: Dict[str, str]):
         self.obis.port = ports.get("OBIS", self.obis.port)
@@ -525,8 +523,6 @@ class SpectroApp(tk.Tk):
 
 
 
-
-
     # ------------------ UI Construction ------------------
     def _all_off_on_start(self):
         try:
@@ -543,7 +539,6 @@ class SpectroApp(tk.Tk):
             self.live_fig.canvas.draw_idle()
         except:
             pass
-
 
 
     def _build_ui(self):
@@ -2044,6 +2039,7 @@ class SpectroApp(tk.Tk):
                     "A2_A3_vs_Wavelength": "7. Slit Function Parameters vs Wavelength",
                     "Spectral_Resolution_with_wavelength": "8. Spectral Resolution vs Wavelength",
                     "Slit_Functions": "9. Modeled Slit Functions",
+                    "Overlapped_LSF_Comparison": "10. Overlaid Normalized LSFs Comparison",
                     "Overlapped_LSF_Lasers_HgAr": "10. Overlaid Normalized LSFs Comparison"
                 }
 
@@ -2165,7 +2161,11 @@ class SpectroApp(tk.Tk):
                 img = Image.open(plot_path)
                 # Resize if too large
                 if img.width > 1000 or img.height > 700:
-                    img.thumbnail((1000, 700), Image.Resampling.LANCZOS)
+                    try:
+                        resample = Image.Resampling.LANCZOS
+                    except AttributeError:
+                        resample = Image.LANCZOS
+                    img.thumbnail((1000, 700), resample)
 
                 photo = ImageTk.PhotoImage(img)
 

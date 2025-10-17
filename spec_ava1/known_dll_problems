@@ -1,0 +1,7 @@
+-9.8.2.0 -> Not compatible with newer (EVO) spectrometers.
+-Either v1.14.0.0 and v1.14.0.9 have the same problem when recovering one of the two spectrometers of a 2S system,
+ when one of the spectrometers loses its power. When this happens, all dll functions will fail for that
+ specific spectrometer, even though re-initializing it. The unique way to make it work again is calling AVS_Done(),
+ in order to finalize the current DLL session, and then re-connect. But this AVS_Done() call is affecting to all other
+ spectrometers previously connected, which could be measuring at that moment without problems. So it is needed to wait
+ until all specs are not measuring, disconnect, call AVS_Done() and then reconnect all of them again.

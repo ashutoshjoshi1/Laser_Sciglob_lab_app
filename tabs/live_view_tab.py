@@ -191,35 +191,47 @@ def build(app):
                         except Exception:
                             pass
 
-                # After IT changes (or none), fetch data and draw
-                y = np.array(app.spec.rcm, dtype=float)
-                x = np.arange(len(y))
-                app.npix = len(y)
+                # --- MODIFIED: Get raw data, check saturation, then clip ---
+                y_raw = np.array(app.spec.rcm, dtype=float)
+                x = np.arange(len(y_raw))
+                app.npix = len(y_raw)
                 app.data.npix = app.npix
 
-                # --- MODIFIED: Check for saturation ---
+                # Get saturation threshold from app object
+                sat_thresh = getattr(app, 'SAT_THRESH', 65400)
+
                 # Check for saturation flag from the wrapper
-                # This assumes the wrapper sets a 'saturated' attribute as your snippet suggested
                 is_saturated = getattr(app.spec, 'saturated', False)
                 
                 # Fallback: Check raw values if attribute doesn't exist
-                if not is_saturated and y.size > 0:
+                if not is_saturated and y_raw.size > 0:
                     try:
-                        peak_val = np.nanmax(y)
-                        if peak_val >= getattr(app, 'SAT_THRESH', 65400):
+                        peak_val = np.nanmax(y_raw)
+                        if peak_val >= sat_thresh:
                             is_saturated = True
                     except Exception:
                         pass # ignore errors on empty/nan data
 
-                # Pass saturation state to the plot update function
+                # --- NEW: Flatten (clip) the data for plotting ---
+                # This replaces values > sat_thresh with sat_thresh
+                y_plot = np.clip(y_raw, a_min=None, a_max=sat_thresh)
+
+                # Pass saturation state and *clipped* data to the plot update function
                 # This calls the _update_live_plot method in app.py
-                app._update_live_plot(x, y, is_saturated)
+                app._update_live_plot(x, y_plot, is_saturated)
                 # --- END MODIFIED ---
 
             except Exception as e:
+                # --- MODIFIED: Make loop resilient ---
+                # If we were told to stop, break
+                if not app.live_running.is_set():
+                    break
+                # Otherwise, post the error and try the next frame
                 app._post_error("Live error", e)
-                break
-
+                # Add a small sleep to prevent rapid-fire errors
+                time.sleep(0.5) 
+                continue # <-- This will continue the while loop
+                # --- END MODIFIED ---
 
     def _update_live_plot(self, x, y):
         def update():

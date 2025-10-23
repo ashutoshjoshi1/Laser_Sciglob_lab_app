@@ -219,122 +219,177 @@ class SerialDevice:
             return ""
 
 
+    def clear_input(self):
+        self._ensure_open()
+        with self.lock:
+            try:
+                self.ser.reset_input_buffer()
+            except Exception:
+                pass
 
-class LaserController: #
+    def clear_output(self):
+        self._ensure_open()
+        with self.lock:
+            try:
+                self.ser.reset_output_buffer()
+            except Exception:
+                pass
+
+class LaserController:
     """Encapsulate OBIS (multi-channel), CUBE (377), and Relay (532/517/Hg-Ar) behavior."""
-    def __init__(self): #
-        self.obis = SerialDevice(DEFAULT_COM_PORTS["OBIS"], 9600, 1) #
-        self.cube = SerialDevice(DEFAULT_COM_PORTS["CUBE"], 19200, 1) #
-        self.relay = SerialDevice(DEFAULT_COM_PORTS["RELAY"], 9600, 1) #
-        self.cube.eol = "\r" #
+    def __init__(self):
+        self.obis = SerialDevice(DEFAULT_COM_PORTS["OBIS"], 9600, 1)
+        self.cube = SerialDevice(DEFAULT_COM_PORTS["CUBE"], 19200, 1)
+        self.relay = SerialDevice(DEFAULT_COM_PORTS["RELAY"], 9600, 1)
+        self.cube.eol = "\r"
 
-    def all_off(self): #
+    def all_off(self):
         # Try to open ports and switch everything OFF; ignore errors (ports may not exist yet)
         try:
-            try: self.obis._ensure_open() #
-            except: pass #
-            for ch in OBIS_LASER_MAP.values(): #
-                try: self.obis.write_line(f"SOUR{ch}:AM:STAT OFF") #
-                except: pass #
-        except: pass #
+            try: self.obis._ensure_open()
+            except: pass
+            for ch in OBIS_LASER_MAP.values():
+                try: self.obis.write_line(f"SOUR{ch}:AM:STAT OFF")
+                except: pass
+        except: pass
         try:
-            try: self.cube._ensure_open() #
-            except: pass #
-            try: self.cube.write_line("L=0") #
-            except: pass #
-        except: pass #
+            try: self.cube._ensure_open()
+            except: pass
+            try: self.cube.write_line("L=0")
+            except: pass
+        except: pass
         try:
-            try: self.relay._ensure_open() #
-            except: pass #
+            try: self.relay._ensure_open()
+            except: pass
             for ch in (1, 2, 3):  # 532, Hg-Ar, 517 (adjust if your mapping differs)
-                try: self.relay.write_line(f"R{ch}R") #
-                except: pass #
-        except: pass #
+                try: self.relay.write_line(f"R{ch}R")
+                except: pass
+        except: pass
 
+    def configure_ports(self, ports: Dict[str, str]):
+        self.obis.port = ports.get("OBIS", self.obis.port)
+        self.cube.port = ports.get("CUBE", self.cube.port)
+        self.relay.port = ports.get("RELAY", self.relay.port)
 
-    def configure_ports(self, ports: Dict[str, str]): #
-        self.obis.port = ports.get("OBIS", self.obis.port) #
-        self.cube.port = ports.get("CUBE", self.cube.port) #
-        self.relay.port = ports.get("RELAY", self.relay.port) #
+    def open_all(self) -> Tuple[bool, bool, bool]:
+        ok_obis = self.obis.open()
+        ok_cube = self.cube.open()
+        ok_relay = self.relay.open()
+        return ok_obis, ok_cube, ok_relay
 
-    def open_all(self) -> Tuple[bool, bool, bool]: #
-        ok_obis = self.obis.open() #
-        ok_cube = self.cube.open() #
-        ok_relay = self.relay.open() #
-        return ok_obis, ok_cube, ok_relay #
-
-    def ensure_open_for_tag(self, tag: str): #
+    def ensure_open_for_tag(self, tag: str):
         """Open the right serial device for the given source tag."""
-        if tag in OBIS_LASER_MAP: #
-            self.obis._ensure_open() #
-        elif tag == "377": #
-            self.cube._ensure_open() #
-        elif tag in ("517", "532", "Hg_Ar"): #
-            self.relay._ensure_open() #
+        if tag in OBIS_LASER_MAP:
+            self.obis._ensure_open()
+        elif tag == "377":
+            self.cube._ensure_open()
+        elif tag in ("517", "532", "Hg_Ar"):
+            self.relay._ensure_open()
 
     # ----- OBIS -----
-    def obis_cmd(self, cmd: str) -> List[str]: #
-        self.obis.write_line(cmd) #
-        return self.obis.read_all_lines() #
+    def obis_cmd(self, cmd: str) -> List[str]:
+        self.obis.write_line(cmd)
+        return self.obis.read_all_lines()
 
-    def obis_on(self, channel: int): #
-        self.obis_cmd(f"SOUR{channel}:AM:STAT ON") #
+    def obis_on(self, channel: int):
+        self.obis_cmd(f"SOUR{channel}:AM:STAT ON")
 
-    def obis_off(self, channel: int): #
-        self.obis_cmd(f"SOUR{channel}:AM:STAT OFF") #
+    def obis_off(self, channel: int):
+        self.obis_cmd(f"SOUR{channel}:AM:STAT OFF")
 
-    def obis_set_power(self, channel: int, watts: float): #
-        self.obis_cmd(f"SOUR{channel}:POW:LEV:IMM:AMPL {watts:.4f}") #
+    def obis_set_power(self, channel: int, watts: float):
+        self.obis_cmd(f"SOUR{channel}:POW:LEV:IMM:AMPL {watts:.4f}")
 
     # ----- CUBE (example protocol: set current then L=1) -----
-    def cube_cmd(self, cmd: str) -> List[str]: #
-        self.cube.write_line(cmd) #
-        resp = self.cube.read_all_text(wait=1.0) #
-        return resp.splitlines() if resp else [] #
-
-    def cube_on(self, power_mw: float = None, current_mA: float = None): #
-        """Turn on CUBE (377 nm).
-        If power_mw is provided, use EXT=1; CW=1; P=<mW>; L=1.
-        Else if current_mA provided, send I=<mA>; L=1 (legacy fallback).
-        """
-        # Ensure CR line endings for CUBE
+    def cube_cmd(self, cmd: str) -> List[str]:
+        """Robust CUBE command: enforce CR line endings, drain input, pace, and retry read."""
         try:
-            self.cube.eol = "\r" #
+            # CUBE expects carriage return (CR) as line ending
+            self.cube.eol = "\r"
         except Exception:
-            pass #
-        if power_mw is not None: #
-            try: self.cube_cmd("EXT=1") #
-            except Exception: pass #
-            try: self.cube_cmd("CW=1") #
-            except Exception: pass #
-            try: self.cube_cmd(f"P={int(round(power_mw))}") #
-            except Exception: pass #
-            self.cube_cmd("L=1") #
-        elif current_mA is not None: #
-            try: self.cube_cmd(f"I={current_mA:.2f}") #
-            except Exception: pass #
-            self.cube_cmd("L=1") #
+            pass
+
+        # Drain any stale buffers so this command's response is clean
+        try:
+            self.cube.clear_input()
+            self.cube.clear_output()
+        except Exception:
+            pass
+
+        # Write the command
+        try:
+            self.cube.write_line(cmd)
+        except Exception:
+            return []
+
+        # Brief processing time, then non-blocking read with a short retry
+        import time as _t
+        _t.sleep(0.05)
+        try:
+            resp = self.cube.read_all_text(wait=0.0)
+        except Exception:
+            resp = ""
+
+        if not resp:
+            _t.sleep(0.05)
+            try:
+                resp = self.cube.read_all_text(wait=0.0)
+            except Exception:
+                resp = ""
+
+        return [line.strip() for line in resp.splitlines()] if resp else []
+
+
+    def cube_on(self, power_mw: float = None, current_mA: float = None):
+        """Turn on CUBE (377 nm) with small inter-command pacing.
+        If power_mw is provided: EXT=1; CW=1; P=<mW>; L=1.
+        Else if current_mA provided: EXT=1; CW=1; I=<mA>; L=1.
+        """
+        try:
+            self.cube.eol = "\r"
+        except Exception:
+            pass
+
+        import time as _t
+
+        def _safe(cmd: str, delay: float = 0.03):
+            try:
+                self.cube_cmd(cmd)
+            except Exception:
+                pass
+            _t.sleep(delay)
+
+        _safe("EXT=1")
+        _safe("CW=1")
+
+        if power_mw is not None:
+            try:
+                self.cube_cmd(f"P={int(round(power_mw))}")
+            except Exception:
+                pass
+            _t.sleep(0.03)
+            self.cube_cmd("L=1")
+        elif current_mA is not None:
+            try:
+                self.cube_cmd(f"I={current_mA:.2f}")
+            except Exception:
+                pass
+            _t.sleep(0.03)
+            self.cube_cmd("L=1")
         else:
-            # Default to 12 mW if nothing given
-            try: self.cube_cmd("EXT=1") #
-            except Exception: pass #
-            try: self.cube_cmd("CW=1") #
-            except Exception: pass #
-            try: self.cube_cmd("P=12") #
-            except Exception: pass #
-            self.cube_cmd("L=1") #
+            _safe("P=12")
+            self.cube_cmd("L=1")
 
-    def cube_off(self): #
-        self.cube_cmd("L=0") #
+    def cube_off(self):
+        self.cube_cmd("L=0")
 
     # ----- Relay board: "R{n}S" set, "R{n}R" reset -----
     # ----- Relay board: "R{n}S" set, "R{n}R" reset -----
-    def relay_on(self, ch: int): #
-        self.relay.write_line(f"R{ch}S") #
+    def relay_on(self, ch: int):
+        self.relay.write_line(f"R{ch}S")
 
-    def relay_off(self, ch: int): #
-        self.relay.write_line(f"R{ch}R") #
-
+    def relay_off(self, ch: int):
+        self.relay.write_line(f"R{ch}R")
 
 
 # ===================================================

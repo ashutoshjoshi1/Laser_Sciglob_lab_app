@@ -1022,21 +1022,22 @@ class SpectroApp(tk.Tk):
     def _update_live_plot(self, x, y, is_saturated: bool = False):
         """Update live plot with new data (called on main thread)."""
         try:
-            # --- REMOVED GUARD ---
-            # The line "if y is None or y.size == 0: return" has been removed
-            # to prevent the plot from freezing on an empty frame.
-
-            # --- ADDED: Clip data to flatten peak ---
-            # This flattens the spectrum at the saturation threshold
-            # We do this *before* set_data, but *after* the
-            # saturation check (which happens in _live_loop)
-            if y is not None and y.size > 0:
-                y = np.clip(y, 0, self.SAT_THRESH)
-            # --- END ADDED ---
-
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
-                # Set line data
-                self.live_line.set_data(x, y)
+
+                # --- FIX: Guard against empty data ---
+                # If we received an empty array (y.size == 0), it's likely a
+                # read error or missed frame. Do *not* update the plot,
+                # which would clear it. Just return and wait for the next frame.
+                # This keeps the last valid (saturated) frame visible.
+                if y is None or y.size == 0:
+                    return
+                # --- END FIX ---
+
+                # Clip data to flatten peak at the threshold
+                y_clipped = np.clip(y, 0, self.SAT_THRESH)
+                
+                # Set line data using the clipped (flattened) data
+                self.live_line.set_data(x, y_clipped)
 
                 # Update color and text based on saturation
                 if is_saturated:
@@ -1050,12 +1051,25 @@ class SpectroApp(tk.Tk):
 
                 # Handle zoom/pan lock
                 if not getattr(self, 'live_limits_locked', False):
-                    self.live_ax.relim()
-                    self.live_ax.autoscale()
+                    # --- IMPROVED AUTOSCALE ---
+                    # Set X-axis limit
+                    self.live_ax.set_xlim(0, max(10, len(x)-1))
+                    
+                    if is_saturated:
+                        # If saturated, set Y-limit to just above the
+                        # saturation threshold so the flattened peak looks correct.
+                        self.live_ax.set_ylim(0, max(1000, self.SAT_THRESH * 1.1))
+                    else:
+                        # Otherwise, use normal auto-scaling logic
+                        ymax = np.nanmax(y) if y.size else 1.0
+                        self.live_ax.set_ylim(0, max(1000, ymax * 1.1))
+                    # --- END IMPROVED AUTOSCALE ---
+                        
                 if hasattr(self, 'live_fig'):
                     self.live_fig.canvas.draw_idle()
+                        
         except Exception:
-            pass
+            pass  # Ignore plot update errors
 
     def toggle_laser(self, tag: str, turn_on: bool):
             """Toggle laser on/off."""

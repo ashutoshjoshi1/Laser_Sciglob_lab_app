@@ -630,8 +630,13 @@ class SpectroApp(tk.Tk):
     def _live_reset_view(self):
         self.live_limits_locked = False
         try:
+            self.live_ax.set_autoscale_on(False)
+            # keep y-range stable
+            if hasattr(self, 'live_y_max'):
+                self.live_ax.set_ylim(0.0, self.live_y_max)
+            else:
+                self.live_ax.set_ylim(0.0, 65000.0)
             self.live_ax.relim()
-            self.live_ax.autoscale()
             self.live_fig.canvas.draw_idle()
         except:
             pass
@@ -803,58 +808,34 @@ class SpectroApp(tk.Tk):
 
     # ------------------ Settings Management ------------------
     def load_settings_into_ui(self):
-        """Load settings from JSON file into UI elements."""
-        if not os.path.isfile(SETTINGS_FILE):
-            # Initialize with defaults if no settings file exists
-            if hasattr(self, 'dll_entry'):
-                self.dll_entry.delete(0, "end")
-                self.dll_entry.insert(0, self.hw.dll_path)
-            if hasattr(self, 'obis_entry'):
-                self.obis_entry.delete(0, "end")
-                self.obis_entry.insert(0, DEFAULT_COM_PORTS["OBIS"])
-            if hasattr(self, 'cube_entry'):
-                self.cube_entry.delete(0, "end")
-                self.cube_entry.insert(0, DEFAULT_COM_PORTS["CUBE"])
-            if hasattr(self, 'relay_entry'):
-                self.relay_entry.delete(0, "end")
-                self.relay_entry.insert(0, DEFAULT_COM_PORTS["RELAY"])
-            if hasattr(self, 'power_entries'):
-                for tag, e in self.power_entries.items():
-                    e.delete(0, "end")
-                    e.insert(0, str(DEFAULT_LASER_POWERS.get(tag, 0.01)))
-            return
-
         try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                obj = json.load(f)
-
-            # Load DLL path
-            if hasattr(self, 'dll_entry'):
-                self.dll_entry.delete(0, "end")
-                self.dll_entry.insert(0, obj.get("dll_path", ""))
-
-            # Load COM ports
-            cp = obj.get("com_ports", DEFAULT_COM_PORTS)
-            if hasattr(self, 'obis_entry'):
-                self.obis_entry.delete(0, "end")
-                self.obis_entry.insert(0, cp.get("OBIS", DEFAULT_COM_PORTS["OBIS"]))
-            if hasattr(self, 'cube_entry'):
-                self.cube_entry.delete(0, "end")
-                self.cube_entry.insert(0, cp.get("CUBE", DEFAULT_COM_PORTS["CUBE"]))
-            if hasattr(self, 'relay_entry'):
-                self.relay_entry.delete(0, "end")
-                self.relay_entry.insert(0, cp.get("RELAY", DEFAULT_COM_PORTS["RELAY"]))
-
-            # Load laser powers
-            lp = obj.get("laser_power", DEFAULT_LASER_POWERS)
-            if hasattr(self, 'power_entries'):
-                for tag, e in self.power_entries.items():
-                    e.delete(0, "end")
-                    e.insert(0, str(lp.get(tag, DEFAULT_LASER_POWERS.get(tag, 0.01))))
-
+            if not os.path.isfile(SETTINGS_FILE):
+                # Initialize with defaults
+                default_settings = {
+                    'dll_path': getattr(self.hw, 'dll_path', ''),
+                    'com_ports': DEFAULT_COM_PORTS,
+                    'power_settings': DEFAULT_POWER_SETTINGS
+                }
+                
+                for key, widget in {
+                    'dll': self.dll_entry,
+                    'obis': self.obis_entry,
+                    'cube': self.cube_entry,
+                    'relay': self.relay_entry
+                }.items():
+                    if hasattr(self, f'{key}_entry'):
+                        widget.delete(0, "end")
+                        if key == 'dll':
+                            widget.insert(0, default_settings['dll_path'])
+                        else:
+                            widget.insert(0, default_settings['com_ports'][key.upper()])
+                            
+                if hasattr(self, 'power_entries'):
+                    for tag, entry in self.power_entries.items():
+                        entry.delete(0, "end")
+                        entry.insert(0, str(default_settings['power_settings'].get(tag, 1.0)))
         except Exception as e:
-            if hasattr(self, 'power_entries'):  # Only show error if UI is built
-                messagebox.showerror("Load Settings", str(e))
+            print(f"Error loading settings: {e}")
 
     def save_settings(self):
         """Save current UI settings to JSON file."""
@@ -1062,17 +1043,43 @@ class SpectroApp(tk.Tk):
                 break
 
     def _update_live_plot(self, x, y):
-        """Update live plot with new data (called on main thread)."""
+        """Update live plot with saturation-safe clipping and fixed y-axis."""
         try:
+            if x is None or y is None:
+                return
+            # Ensure arrays
+            x = np.asarray(x, dtype=float)
+            y = np.asarray(y, dtype=float)
+
+            # Ensure display ceilings exist
+            if not hasattr(self, 'display_flat_ceiling'):
+                self.display_flat_ceiling = 60000.0
+            if not hasattr(self, 'live_y_max'):
+                self.live_y_max = 65000.0
+
+            # Sanitize and clip: saturated region shows as a flat top
+            y = np.nan_to_num(y, nan=0.0, posinf=self.live_y_max, neginf=0.0)
+            y_plot = np.minimum(y, self.display_flat_ceiling)
+
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
-                self.live_line.set_data(x, y)
-                if not getattr(self, 'live_limits_locked', False):
-                    self.live_ax.relim()
-                    self.live_ax.autoscale()
+                self.live_line.set_data(x, y_plot)
+
+                # x-limits
+                if x.size:
+                    x0 = float(np.nanmin(x))
+                    x1 = float(np.nanmax(x))
+                    if not np.isfinite(x0) or not np.isfinite(x1) or x1 <= x0:
+                        x0, x1 = 0.0, max(1.0, len(x) - 1)
+                    self.live_ax.set_xlim(x0, x1)
+
+                # y-limits: keep stable to avoid autoscale hide
+                self.live_ax.set_ylim(0.0, self.live_y_max)
+
                 if hasattr(self, 'live_fig'):
                     self.live_fig.canvas.draw_idle()
         except Exception:
             pass  # Ignore plot update errors
+
 
     # ------------------ Laser Control ------------------
     def toggle_laser(self, tag: str, turn_on: bool):

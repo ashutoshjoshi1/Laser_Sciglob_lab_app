@@ -985,94 +985,62 @@ class SpectroApp(tk.Tk):
         """Live view loop running in separate thread."""
         while self.live_running.is_set():
             try:
-                # Start one frame safely
-                ret = self._safe_spec_call(lambda: self.spec.measure(ncy=1) if self.spec else None)
-                if ret is None and not self.spec:
-                    break  # _safe_spec_call already handled error and disconnected
-
+                # Start one frame
+                self.spec.measure(ncy=1)
                 # Wait for frame to complete
-                ret2 = self._safe_spec_call(lambda: self.spec.wait_for_measurement() if self.spec else None)
-                if ret2 is None and not self.spec:
-                    break
+                self.spec.wait_for_measurement()
 
                 # Apply any deferred IT safely after the completed frame
                 if self._pending_it is not None:
-                    try:
-                        it_to_apply = self._pending_it
-                        self._pending_it = None
-                        self._it_updating = True
-                        ret3 = self._safe_spec_call(lambda: self.spec.set_it(it_to_apply) if self.spec else None)
-                        if ret3 is None and not self.spec:
-                            break
+                    # Get spectrum data
+                    y = np.array(self.spec.rcm, dtype=float)
+                    x = np.arange(len(y))
+                    
+                    # --- MODIFIED: Check for saturation ---
+                    # This logic is now handled by the _live_loop in live_view_tab.py,
+                    # but we add a fallback check here in case that module isn't loaded.
+                    is_saturated = getattr(self.spec, 'saturated', False)
+                    if not is_saturated and y.size > 0:
                         try:
-                            self.title(f"Applied IT={it_to_apply:.3f} ms")
+                            peak_val = np.nanmax(y)
+                            if peak_val >= self.SAT_THRESH:
+                                is_saturated = True
                         except Exception:
-                            pass
-                    except Exception as e:
-                        self._post_error("Apply IT (deferred)", e)
-                    finally:
-                        self._it_updating = False
-                        try:
-                            if hasattr(self, 'apply_it_btn'):
-                                self.apply_it_btn.state(["!disabled"])
-                        except Exception:
-                            pass
+                            pass # ignore errors on empty/nan data
+                    
+                    # Update plot on main thread
+                    self.after(0, lambda x_data=x, y_data=y, sat=is_saturated: self._update_live_plot(x_data, y_data, sat))
+                    # --- END MODIFIED ---
 
-                # Get spectrum data
-                try:
-                    if not self.spec:
-                        break
-                    y_raw = getattr(self.spec, 'rcm', None)
-                    # Some wrappers may expose rcm as property or method
-                    if callable(y_raw):
-                        y = np.array(y_raw(), dtype=float)
-                    else:
-                        y = np.array(self.spec.rcm, dtype=float)
-                except Exception as e:
-                    self._handle_avaspec_error(e, context="reading rcm in live loop")
-                    break
-
-                # Update plot on main thread
-                self.after(0, lambda: self._update_live_plot(np.arange(len(y)), y))
-
-                # Removed thread sleep to eliminate delays
-
+                    time.sleep(0.1)  # Small delay between frames
             except Exception as e:
                 if self.live_running.is_set():  # Only show error if still running
                     self._post_error("Live View", e)
                 break
 
     
-    def _update_live_plot(self, x, y):
-        """Update live plot with saturation-safe clipping and fixed y-axis."""
+    def _update_live_plot(self, x, y, is_saturated: bool = False):
+        """Update live plot with new data (called on main thread)."""
         try:
-            if x is None or y is None:
-                return
-
-            import numpy as np
-
-            x = np.asarray(x, dtype=float)
-            y = np.asarray(y, dtype=float)
-            y = np.nan_to_num(y, nan=0.0, posinf=65535.0, neginf=0.0)
-            y_clipped = np.clip(y, 0, 60000)
-
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
-                self.live_line.set_data(x, y_clipped)
+                # Set line data
+                self.live_line.set_data(x, y)
+                
+                # Update color and text based on saturation
+                if is_saturated:
+                    self.live_line.set_color('red')
+                    if hasattr(self, 'live_saturation_text'):
+                        self.live_saturation_text.set_visible(True)
+                else:
+                    self.live_line.set_color('blue') # Default color
+                    if hasattr(self, 'live_saturation_text'):
+                        self.live_saturation_text.set_visible(False)
 
-                if x.size:
-                    x0, x1 = float(np.nanmin(x)), float(np.nanmax(x))
-                    if not np.isfinite(x0) or not np.isfinite(x1) or x1 <= x0:
-                        x0, x1 = 0.0, max(1.0, len(x) - 1)
-                    self.live_ax.set_xlim(x0, x1)
-
-                if hasattr(self, 'live_limits_locked') and not self.live_limits_locked:
-                    if np.nanmax(y) > 60000:
-                        self.live_ax.set_ylim(0.0, 65000.0)
-                    else:
-                        ypeak = np.nanmax(y_clipped) if y_clipped.size else 0.0
-                        yauto = max(1000.0, min(ypeak * 1.1, 65000.0))
-                        self.live_ax.set_ylim(0.0, yauto)
-
+                # Handle zoom/pan lock
+                if not getattr(self, 'live_limits_locked', False):
+                    self.live_ax.relim()
+                    self.live_ax.autoscale()
+                    
                 if hasattr(self, 'live_fig'):
                     self.live_fig.canvas.draw_idle()
         except Exception:

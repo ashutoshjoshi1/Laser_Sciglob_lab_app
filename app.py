@@ -670,6 +670,29 @@ class SpectroApp(tk.Tk):
     def _build_measure_tab(self):
         from tabs.measurements_tab import build as _build
         _build(self)
+
+        # --- ADDED: Saturation Policy Dropdown ---
+        # Find the 'mid' frame created by measurements_tab.py to add to it.
+        # This is an approximation; you may need to place it manually in your tab file.
+        if hasattr(self, 'auto_it_entry'):
+            try:
+                # Find the parent frame of the auto_it_entry
+                policy_frame = self.auto_it_entry.master
+                
+                ttk.Label(policy_frame, text="On Saturation:").grid(row=4, column=0, sticky="w", padx=4, pady=4)
+                
+                # Mimics blick's data_status[ispec][8] policy
+                self.saturation_policy_var = tk.StringVar(value="Continue")
+                policy_combo = ttk.Combobox(
+                    policy_frame,
+                    textvariable=self.saturation_policy_var,
+                    values=["Continue", "Abort Measurement"],
+                    state="readonly",
+                    width=18
+                )
+                policy_combo.grid(row=4, column=1, sticky="w", padx=4, pady=4)
+            except Exception as e:
+                print(f"Could not add saturation policy dropdown: {e}")
     def _build_analysis_tab(self):
         # The analysis_tab builder should create:
         # - self.analysis_notebook (ttk.Notebook) or we create one later
@@ -1022,17 +1045,12 @@ class SpectroApp(tk.Tk):
     def _update_live_plot(self, x, y, is_saturated: bool = False):
         """Update live plot with new data (called on main thread)."""
         try:
+            # --- GUARD REMOVED ---
+            # The "if y.size == 0: return" guard is removed.
+            # The _live_loop now handles empty data by not calling this function.
+
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
-
-                # --- FIX: Guard against empty data ---
-                # If we received an empty array (y.size == 0), it's likely a
-                # read error or missed frame. Do *not* update the plot,
-                # which would clear it. Just return and wait for the next frame.
-                # This keeps the last valid (saturated) frame visible.
-                if y is None or y.size == 0:
-                    return
-                # --- END FIX ---
-
+                
                 # Clip data to flatten peak at the threshold
                 y_clipped = np.clip(y, 0, self.SAT_THRESH)
                 
@@ -1052,16 +1070,14 @@ class SpectroApp(tk.Tk):
                 # Handle zoom/pan lock
                 if not getattr(self, 'live_limits_locked', False):
                     # --- IMPROVED AUTOSCALE ---
-                    # Set X-axis limit
                     self.live_ax.set_xlim(0, max(10, len(x)-1))
                     
                     if is_saturated:
-                        # If saturated, set Y-limit to just above the
-                        # saturation threshold so the flattened peak looks correct.
+                        # If saturated, lock Y-limit to the threshold
                         self.live_ax.set_ylim(0, max(1000, self.SAT_THRESH * 1.1))
                     else:
-                        # Otherwise, use normal auto-scaling logic
-                        ymax = np.nanmax(y) if y.size else 1.0
+                        # Otherwise, autoscale normally
+                        ymax = np.nanmax(y_clipped) # Use clipped data for max
                         self.live_ax.set_ylim(0, max(1000, ymax * 1.1))
                     # --- END IMPROVED AUTOSCALE ---
                         

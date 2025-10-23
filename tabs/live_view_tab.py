@@ -191,18 +191,25 @@ def build(app):
                         except Exception:
                             pass
 
-                # After IT changes (or none), fetch data and draw
+                # --- FIX: GUARD FOR EMPTY DATA ---
                 y = np.array(app.spec.rcm, dtype=float)
+                if y is None or y.size == 0:
+                    # If data is empty (common on sat/error), skip this
+                    # frame and try again. This prevents clearing the plot.
+                    time.sleep(0.1) # Prevent spin-lock
+                    continue
+                # --- END FIX ---
+
+                # After IT changes (or none), fetch data and draw
                 x = np.arange(len(y))
                 app.npix = len(y)
                 app.data.npix = app.npix
 
                 # --- Check for saturation ---
-                # Check for saturation flag from the wrapper
                 is_saturated = getattr(app.spec, 'saturated', False)
                 
-                # Fallback: Check raw values if attribute doesn't exist
-                if not is_saturated and y.size > 0:
+                # Fallback: Check raw values (y.size > 0 is guaranteed here)
+                if not is_saturated:
                     try:
                         peak_val = np.nanmax(y)
                         if peak_val >= getattr(app, 'SAT_THRESH', 65400):
@@ -212,7 +219,6 @@ def build(app):
 
                 # Pass saturation state to the plot update function
                 app._update_live_plot(x, y, is_saturated)
-                # --- End saturation check ---
 
             except Exception as e:
                 app._post_error("Live error", e)

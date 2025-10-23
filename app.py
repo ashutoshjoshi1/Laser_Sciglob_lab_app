@@ -1022,12 +1022,16 @@ class SpectroApp(tk.Tk):
     def _update_live_plot(self, x, y, is_saturated: bool = False):
         """Update live plot with new data (called on main thread)."""
         try:
-            # --- ADDED: Guard against empty data ---
-            # If no data is passed (e.g., y is an empty array),
-            # just return. This stops the plot from clearing
-            # itself and leaves the last valid frame (the saturated one) visible.
-            if y is None or y.size == 0:
-                return
+            # --- REMOVED GUARD ---
+            # The line "if y is None or y.size == 0: return" has been removed
+            # to prevent the plot from freezing on an empty frame.
+
+            # --- ADDED: Clip data to flatten peak ---
+            # This flattens the spectrum at the saturation threshold
+            # We do this *before* set_data, but *after* the
+            # saturation check (which happens in _live_loop)
+            if y is not None and y.size > 0:
+                y = np.clip(y, 0, self.SAT_THRESH)
             # --- END ADDED ---
 
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):

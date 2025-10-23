@@ -196,11 +196,28 @@ def build(app):
                 x = np.arange(len(y))
                 app.npix = len(y)
                 app.data.npix = app.npix
-                app._update_live_plot(x, y)
+
+                # --- Check for saturation ---
+                # Check for saturation flag from the wrapper
+                is_saturated = getattr(app.spec, 'saturated', False)
+                
+                # Fallback: Check raw values if attribute doesn't exist
+                if not is_saturated and y.size > 0:
+                    try:
+                        peak_val = np.nanmax(y)
+                        if peak_val >= getattr(app, 'SAT_THRESH', 65400):
+                            is_saturated = True
+                    except Exception:
+                        pass # ignore errors on empty/nan data
+
+                # Pass saturation state to the plot update function
+                app._update_live_plot(x, y, is_saturated)
+                # --- End saturation check ---
 
             except Exception as e:
                 app._post_error("Live error", e)
-                break
+                # --- MODIFIED: Continue on error instead of breaking ---
+                continue # <-- This keeps the loop alive
 
 
     def _update_live_plot(self, x, y):

@@ -31,6 +31,13 @@ def build(app):
         app.live_ax.set_title("Live Spectrum")
         app.live_ax.set_xlabel("Pixel")
         app.live_ax.set_ylabel("Counts")
+        if not hasattr(app, 'display_flat_ceiling'):
+            app.display_flat_ceiling = 60000.0
+        if not hasattr(app, 'live_y_max'):
+            app.live_y_max = 65000.0
+        app.live_ax.set_autoscale_on(False)
+        app.live_ax.set_ylim(0.0, app.live_y_max)
+
         app.live_line, = app.live_ax.plot([], [], lw=1, label="Signal")
 
         # --- keep the live view stable even when a few pixels saturate ---

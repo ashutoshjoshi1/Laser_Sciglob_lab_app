@@ -1042,93 +1042,89 @@ class SpectroApp(tk.Tk):
                     self._post_error("Live View", e)
                 break
 
+    
     def _update_live_plot(self, x, y):
         """Update live plot with saturation-safe clipping and fixed y-axis."""
         try:
             if x is None or y is None:
                 return
-            # Ensure arrays
+
+            import numpy as np
+
             x = np.asarray(x, dtype=float)
             y = np.asarray(y, dtype=float)
-
-            # Ensure display ceilings exist
-            if not hasattr(self, 'display_flat_ceiling'):
-                self.display_flat_ceiling = 60000.0
-            if not hasattr(self, 'live_y_max'):
-                self.live_y_max = 65000.0
-
-            # Sanitize and clip: saturated region shows as a flat top
-            y = np.nan_to_num(y, nan=0.0, posinf=self.live_y_max, neginf=0.0)
-            y_plot = np.minimum(y, self.display_flat_ceiling)
+            y = np.nan_to_num(y, nan=0.0, posinf=65535.0, neginf=0.0)
+            y_clipped = np.clip(y, 0, 60000)
 
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
-                self.live_line.set_data(x, y_plot)
+                self.live_line.set_data(x, y_clipped)
 
-                # x-limits
                 if x.size:
-                    x0 = float(np.nanmin(x))
-                    x1 = float(np.nanmax(x))
+                    x0, x1 = float(np.nanmin(x)), float(np.nanmax(x))
                     if not np.isfinite(x0) or not np.isfinite(x1) or x1 <= x0:
                         x0, x1 = 0.0, max(1.0, len(x) - 1)
                     self.live_ax.set_xlim(x0, x1)
 
-                # y-limits: keep stable to avoid autoscale hide
-                self.live_ax.set_ylim(0.0, self.live_y_max)
+                if hasattr(self, 'live_limits_locked') and not self.live_limits_locked:
+                    if np.nanmax(y) > 60000:
+                        self.live_ax.set_ylim(0.0, 65000.0)
+                    else:
+                        ypeak = np.nanmax(y_clipped) if y_clipped.size else 0.0
+                        yauto = max(1000.0, min(ypeak * 1.1, 65000.0))
+                        self.live_ax.set_ylim(0.0, yauto)
 
                 if hasattr(self, 'live_fig'):
                     self.live_fig.canvas.draw_idle()
         except Exception:
-            pass  # Ignore plot update errors
+            pass
 
-
-    # ------------------ Laser Control ------------------
     def toggle_laser(self, tag: str, turn_on: bool):
-        """Toggle laser on/off."""
-        try:
-            # Make sure we use the latest COM port entries
-            self._update_ports_from_ui()
-            # Open the right serial port lazily
-            self.lasers.ensure_open_for_tag(tag)
+            """Toggle laser on/off."""
+            try:
+                # Make sure we use the latest COM port entries
+                self._update_ports_from_ui()
+                # Open the right serial port lazily
+                self.lasers.ensure_open_for_tag(tag)
 
-            if tag in OBIS_LASER_MAP:
-                ch = OBIS_LASER_MAP[tag]
-                if turn_on:
-                    watts = float(self._get_power(tag))
-                    self.lasers.obis_set_power(ch, watts)
-                    self.lasers.obis_on(ch)
-                else:
-                    self.lasers.obis_off(ch)
+                if tag in OBIS_LASER_MAP:
+                    ch = OBIS_LASER_MAP[tag]
+                    if turn_on:
+                        watts = float(self._get_power(tag))
+                        self.lasers.obis_set_power(ch, watts)
+                        self.lasers.obis_on(ch)
+                    else:
+                        self.lasers.obis_off(ch)
 
-            elif tag == "377":
-                if turn_on:
-                    val = float(self._get_power(tag))
-                    mw = val * 1000.0 if val <= 0.3 else val
-                    self.lasers.cube_on(power_mw=mw)
-                else:
-                    self.lasers.cube_off()
+                elif tag == "377":
+                    if turn_on:
+                        val = float(self._get_power(tag))
+                        mw = val * 1000.0 if val <= 0.3 else val
+                        self.lasers.cube_on(power_mw=mw)
+                    else:
+                        self.lasers.cube_off()
 
-            elif tag == "517":
-                if turn_on:
-                    self.lasers.relay_on(3)
-                else:
-                    self.lasers.relay_off(3)
+                elif tag == "517":
+                    if turn_on:
+                        self.lasers.relay_on(3)
+                    else:
+                        self.lasers.relay_off(3)
 
-            elif tag == "532":
-                if turn_on:
-                    self.lasers.relay_on(1)
-                else:
-                    self.lasers.relay_off(1)
+                elif tag == "532":
+                    if turn_on:
+                        self.lasers.relay_on(1)
+                    else:
+                        self.lasers.relay_off(1)
 
-            elif tag == "Hg_Ar":
-                if turn_on:
-                    # Replaced countdown blocking modal by immediate prompt (no delay)
-                    self._countdown_modal(0, "Fiber Switch", "Switch the fiber to Hg-Ar and press OK to continue.")
-                    self.lasers.relay_on(2)
-                else:
-                    self.lasers.relay_off(2)
+                elif tag == "Hg_Ar":
+                    if turn_on:
+                        # Replaced countdown blocking modal by immediate prompt (no delay)
+                        self._countdown_modal(0, "Fiber Switch", "Switch the fiber to Hg-Ar and press OK to continue.")
+                        self.lasers.relay_on(2)
+                    else:
+                        self.lasers.relay_off(2)
 
-        except Exception as e:
-            self._post_error(f"Laser {tag}", e)
+            except Exception as e:
+                self._post_error(f"Laser {tag}", e)
 
     def _ensure_source_state(self, tag: str, turn_on: bool):
         """Turn on/off source described by tag with port auto-open."""

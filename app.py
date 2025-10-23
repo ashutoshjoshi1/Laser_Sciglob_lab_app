@@ -1022,17 +1022,25 @@ class SpectroApp(tk.Tk):
     def _update_live_plot(self, x, y, is_saturated: bool = False):
         """Update live plot with new data (called on main thread)."""
         try:
+            # --- ADDED: Guard against empty data ---
+            # If no data is passed (e.g., y is an empty array),
+            # just return. This stops the plot from clearing
+            # itself and leaves the last valid frame (the saturated one) visible.
+            if y is None or y.size == 0:
+                return
+            # --- END ADDED ---
+
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
                 # Set line data
                 self.live_line.set_data(x, y)
-                
+
                 # Update color and text based on saturation
                 if is_saturated:
                     self.live_line.set_color('red')
                     if hasattr(self, 'live_saturation_text'):
                         self.live_saturation_text.set_visible(True)
                 else:
-                    self.live_line.set_color('blue') # Default color
+                    self.live_line.set_color('blue')  # Default color
                     if hasattr(self, 'live_saturation_text'):
                         self.live_saturation_text.set_visible(False)
 
@@ -1040,7 +1048,6 @@ class SpectroApp(tk.Tk):
                 if not getattr(self, 'live_limits_locked', False):
                     self.live_ax.relim()
                     self.live_ax.autoscale()
-                    
                 if hasattr(self, 'live_fig'):
                     self.live_fig.canvas.draw_idle()
         except Exception:

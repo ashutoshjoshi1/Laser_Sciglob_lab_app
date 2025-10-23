@@ -459,13 +459,26 @@ class SpectroApp(tk.Tk):
         self._it_updating = False
 
         super().__init__()
+        # Global thread exception hook to suppress AvaSpec watchdog crashes
+        try:
+            import threading, traceback
+            def _thread_excepthook(args):
+                tb = ''.join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+                if 'avantes_spectrometer.py' in tb and 'data_handling_watchdog' in tb:
+                    print('[AvaSpec Watchdog] Suppressed thread error:', args.exc_value)
+                    # We already handle device stop/disconnect via _handle_avaspec_error
+                    return
+                # Otherwise, use default handler
+                sys.__excepthook__(args.exc_type, args.exc_value, args.exc_traceback)
+            threading.excepthook = _thread_excepthook
+        except Exception as _eh:
+            print('[Init] Could not set threading.excepthook:', _eh)
         self.title("SciGlob - Spectrometer Characterization System")
         self.geometry("1250x800")
         self._set_window_icon()
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         self.it_history = []
-
         # State
         self.hw = HardwareState()
         self.lasers = LaserController()
@@ -521,7 +534,7 @@ class SpectroApp(tk.Tk):
         self.after(0, self._all_off_on_start)
 
 
-    # ---------------- Safety: Avantes -5 handling ----------------
+     # ---------------- Safety: Avantes -5 handling ----------------
     def _handle_avaspec_error(self, err: Any, context: str = ""):
         """
         Central handler for Avantes spectrometer critical errors.
@@ -609,14 +622,54 @@ class SpectroApp(tk.Tk):
             return None
         try:
             ret = call_fn(*args, **kwargs)
-            # Some wrappers return integer error codes directly
-            if isinstance(ret, int) and ret == -5:
+            # Some wrappers return integer error codes directly OR embed them in strings.
+            # Treat Avantes pending-op error (-5) as critical and stop the spectrometer.
+            if (isinstance(ret, int) and ret == -5) or (isinstance(ret, str) and "error code -5" in ret.lower()):
                 self._handle_avaspec_error(-5, context=getattr(call_fn, "__name__", "spec_call"))
                 return None
             return ret
         except Exception as e:
             # Catch exceptions from the wrapper and handle
+            # Also detect stringified -5 in the exception text, if present.
+            try:
+                if hasattr(e, "args") and any(isinstance(a, str) and "error code -5" in a.lower() for a in e.args):
+                    self._handle_avaspec_error(-5, context=getattr(call_fn, "__name__", "spec_call"))
+                    return None
+            except Exception:
+                pass
             self._handle_avaspec_error(e, context=getattr(call_fn, "__name__", "spec_call"))
+            return None
+        
+    def call_fn(self, fn_name: str, *args, **kwargs):
+        """
+        Convenience wrapper to call a spectrometer method by name through
+        the app's safe executor. Usage:
+            self.call_fn('set_it', 5.0)
+            self.call_fn('measure', ncy=1)
+            self.call_fn('wait_for_measurement')
+        Returns the callable's return value on success, or None on failure.
+        """
+        if not self.spec or not hasattr(self.spec, fn_name):
+            return None
+        def _op():
+            return getattr(self.spec, fn_name)(*args, **kwargs)
+        return self._safe_spec_call(_op)
+
+    # Optional: typed convenience shims (useful in other modules/UI)
+    def spec_set_it(self, it_ms: float):
+        return self.call_fn('set_it', it_ms)
+
+    def spec_measure(self, **kwargs):
+        return self.call_fn('measure', **kwargs)
+
+    def spec_wait(self):
+        return self.call_fn('wait_for_measurement')
+
+    def spec_abort(self):
+        # best-effort abort; ignore outcome
+        try:
+            return self.call_fn('abort')
+        except Exception:
             return None
 
     # ------------------ UI Construction ------------------
@@ -630,13 +683,8 @@ class SpectroApp(tk.Tk):
     def _live_reset_view(self):
         self.live_limits_locked = False
         try:
-            self.live_ax.set_autoscale_on(False)
-            # keep y-range stable
-            if hasattr(self, 'live_y_max'):
-                self.live_ax.set_ylim(0.0, self.live_y_max)
-            else:
-                self.live_ax.set_ylim(0.0, 65000.0)
             self.live_ax.relim()
+            self.live_ax.autoscale()
             self.live_fig.canvas.draw_idle()
         except:
             pass
@@ -670,29 +718,6 @@ class SpectroApp(tk.Tk):
     def _build_measure_tab(self):
         from tabs.measurements_tab import build as _build
         _build(self)
-
-        # --- ADDED: Saturation Policy Dropdown ---
-        # Find the 'mid' frame created by measurements_tab.py to add to it.
-        # This is an approximation; you may need to place it manually in your tab file.
-        if hasattr(self, 'auto_it_entry'):
-            try:
-                # Find the parent frame of the auto_it_entry
-                policy_frame = self.auto_it_entry.master
-                
-                ttk.Label(policy_frame, text="On Saturation:").grid(row=4, column=0, sticky="w", padx=4, pady=4)
-                
-                # Mimics blick's data_status[ispec][8] policy
-                self.saturation_policy_var = tk.StringVar(value="Continue")
-                policy_combo = ttk.Combobox(
-                    policy_frame,
-                    textvariable=self.saturation_policy_var,
-                    values=["Continue", "Abort Measurement"],
-                    state="readonly",
-                    width=18
-                )
-                policy_combo.grid(row=4, column=1, sticky="w", padx=4, pady=4)
-            except Exception as e:
-                print(f"Could not add saturation policy dropdown: {e}")
     def _build_analysis_tab(self):
         # The analysis_tab builder should create:
         # - self.analysis_notebook (ttk.Notebook) or we create one later
@@ -734,7 +759,7 @@ class SpectroApp(tk.Tk):
         ymax = self._safe_ymax(spectrum)
         try:
             self.meas_ax.set_xlim(0, xmax)
-            self.meas_ax.set_ylim(0, ymax)
+            self.meas_ax.set_ylim(0, 65000)
             self.meas_ax.set_title(
                 f"Spectrometer= {self.sn or 'Unknown'}: Live Measurement for {tag} nm | IT={it_ms:.1f} ms | peak={peak:.0f}"
             )
@@ -1008,132 +1033,124 @@ class SpectroApp(tk.Tk):
         """Live view loop running in separate thread."""
         while self.live_running.is_set():
             try:
-                # Start one frame
-                self.spec.measure(ncy=1)
+                # Start one frame safely
+                ret = self._safe_spec_call(lambda: self.spec.measure(ncy=1) if self.spec else None)
+                if ret is None and not self.spec:
+                    break  # _safe_spec_call already handled error and disconnected
+
                 # Wait for frame to complete
-                self.spec.wait_for_measurement()
+                ret2 = self._safe_spec_call(lambda: self.spec.wait_for_measurement() if self.spec else None)
+                if ret2 is None and not self.spec:
+                    break
 
                 # Apply any deferred IT safely after the completed frame
                 if self._pending_it is not None:
-                    # Get spectrum data
-                    y = np.array(self.spec.rcm, dtype=float)
-                    x = np.arange(len(y))
-                    
-                    # --- MODIFIED: Check for saturation ---
-                    # This logic is now handled by the _live_loop in live_view_tab.py,
-                    # but we add a fallback check here in case that module isn't loaded.
-                    is_saturated = getattr(self.spec, 'saturated', False)
-                    if not is_saturated and y.size > 0:
+                    try:
+                        it_to_apply = self._pending_it
+                        self._pending_it = None
+                        self._it_updating = True
+                        ret3 = self._safe_spec_call(lambda: self.spec.set_it(it_to_apply) if self.spec else None)
+                        if ret3 is None and not self.spec:
+                            break
                         try:
-                            peak_val = np.nanmax(y)
-                            if peak_val >= self.SAT_THRESH:
-                                is_saturated = True
+                            self.title(f"Applied IT={it_to_apply:.3f} ms")
                         except Exception:
-                            pass # ignore errors on empty/nan data
-                    
-                    # Update plot on main thread
-                    self.after(0, lambda x_data=x, y_data=y, sat=is_saturated: self._update_live_plot(x_data, y_data, sat))
-                    # --- END MODIFIED ---
+                            pass
+                    except Exception as e:
+                        self._post_error("Apply IT (deferred)", e)
+                    finally:
+                        self._it_updating = False
+                        try:
+                            if hasattr(self, 'apply_it_btn'):
+                                self.apply_it_btn.state(["!disabled"])
+                        except Exception:
+                            pass
 
-                    time.sleep(0.1)  # Small delay between frames
+                # Get spectrum data
+                try:
+                    if not self.spec:
+                        break
+                    y_raw = getattr(self.spec, 'rcm', None)
+                    # Some wrappers may expose rcm as property or method
+                    if callable(y_raw):
+                        y = np.array(y_raw(), dtype=float)
+                    else:
+                        y = np.array(self.spec.rcm, dtype=float)
+                except Exception as e:
+                    self._handle_avaspec_error(e, context="reading rcm in live loop")
+                    break
+
+                # Update plot on main thread
+                self.after(0, lambda: self._update_live_plot(np.arange(len(y)), y))
+
+                # Removed thread sleep to eliminate delays
+
             except Exception as e:
                 if self.live_running.is_set():  # Only show error if still running
                     self._post_error("Live View", e)
                 break
 
-    
-    def _update_live_plot(self, x, y, is_saturated: bool = False):
+    def _update_live_plot(self, x, y):
         """Update live plot with new data (called on main thread)."""
         try:
-            # --- GUARD REMOVED ---
-            # The "if y.size == 0: return" guard is removed.
-            # The _live_loop now handles empty data by not calling this function.
-
             if hasattr(self, 'live_line') and hasattr(self, 'live_ax'):
-                
-                # Clip data to flatten peak at the threshold
-                y_clipped = np.clip(y, 0, self.SAT_THRESH)
-                
-                # Set line data using the clipped (flattened) data
-                self.live_line.set_data(x, y_clipped)
-
-                # Update color and text based on saturation
-                if is_saturated:
-                    self.live_line.set_color('red')
-                    if hasattr(self, 'live_saturation_text'):
-                        self.live_saturation_text.set_visible(True)
-                else:
-                    self.live_line.set_color('blue')  # Default color
-                    if hasattr(self, 'live_saturation_text'):
-                        self.live_saturation_text.set_visible(False)
-
-                # Handle zoom/pan lock
+                self.live_line.set_data(x, y)
                 if not getattr(self, 'live_limits_locked', False):
-                    # --- IMPROVED AUTOSCALE ---
-                    self.live_ax.set_xlim(0, max(10, len(x)-1))
-                    
-                    if is_saturated:
-                        # If saturated, lock Y-limit to the threshold
-                        self.live_ax.set_ylim(0, max(1000, self.SAT_THRESH * 1.1))
-                    else:
-                        # Otherwise, autoscale normally
-                        ymax = np.nanmax(y_clipped) # Use clipped data for max
-                        self.live_ax.set_ylim(0, max(1000, ymax * 1.1))
-                    # --- END IMPROVED AUTOSCALE ---
-                        
+                    self.live_ax.relim()
+                    self.live_ax.autoscale()
                 if hasattr(self, 'live_fig'):
                     self.live_fig.canvas.draw_idle()
-                        
         except Exception:
             pass  # Ignore plot update errors
 
+    # ------------------ Laser Control ------------------
     def toggle_laser(self, tag: str, turn_on: bool):
-            """Toggle laser on/off."""
-            try:
-                # Make sure we use the latest COM port entries
-                self._update_ports_from_ui()
-                # Open the right serial port lazily
-                self.lasers.ensure_open_for_tag(tag)
+        """Toggle laser on/off."""
+        try:
+            # Make sure we use the latest COM port entries
+            self._update_ports_from_ui()
+            # Open the right serial port lazily
+            self.lasers.ensure_open_for_tag(tag)
 
-                if tag in OBIS_LASER_MAP:
-                    ch = OBIS_LASER_MAP[tag]
-                    if turn_on:
-                        watts = float(self._get_power(tag))
-                        self.lasers.obis_set_power(ch, watts)
-                        self.lasers.obis_on(ch)
-                    else:
-                        self.lasers.obis_off(ch)
+            if tag in OBIS_LASER_MAP:
+                ch = OBIS_LASER_MAP[tag]
+                if turn_on:
+                    watts = float(self._get_power(tag))
+                    self.lasers.obis_set_power(ch, watts)
+                    self.lasers.obis_on(ch)
+                else:
+                    self.lasers.obis_off(ch)
 
-                elif tag == "377":
-                    if turn_on:
-                        val = float(self._get_power(tag))
-                        mw = val * 1000.0 if val <= 0.3 else val
-                        self.lasers.cube_on(power_mw=mw)
-                    else:
-                        self.lasers.cube_off()
+            elif tag == "377":
+                if turn_on:
+                    val = float(self._get_power(tag))
+                    mw = val * 1000.0 if val <= 0.3 else val
+                    self.lasers.cube_on(power_mw=mw)
+                else:
+                    self.lasers.cube_off()
 
-                elif tag == "517":
-                    if turn_on:
-                        self.lasers.relay_on(3)
-                    else:
-                        self.lasers.relay_off(3)
+            elif tag == "517":
+                if turn_on:
+                    self.lasers.relay_on(3)
+                else:
+                    self.lasers.relay_off(3)
 
-                elif tag == "532":
-                    if turn_on:
-                        self.lasers.relay_on(1)
-                    else:
-                        self.lasers.relay_off(1)
+            elif tag == "532":
+                if turn_on:
+                    self.lasers.relay_on(1)
+                else:
+                    self.lasers.relay_off(1)
 
-                elif tag == "Hg_Ar":
-                    if turn_on:
-                        # Replaced countdown blocking modal by immediate prompt (no delay)
-                        self._countdown_modal(0, "Fiber Switch", "Switch the fiber to Hg-Ar and press OK to continue.")
-                        self.lasers.relay_on(2)
-                    else:
-                        self.lasers.relay_off(2)
+            elif tag == "Hg_Ar":
+                if turn_on:
+                    # Replaced countdown blocking modal by immediate prompt (no delay)
+                    self._countdown_modal(0, "Fiber Switch", "Switch the fiber to Hg-Ar and press OK to continue.")
+                    self.lasers.relay_on(2)
+                else:
+                    self.lasers.relay_off(2)
 
-            except Exception as e:
-                self._post_error(f"Laser {tag}", e)
+        except Exception as e:
+            self._post_error(f"Laser {tag}", e)
 
     def _ensure_source_state(self, tag: str, turn_on: bool):
         """Turn on/off source described by tag with port auto-open."""
@@ -1524,7 +1541,7 @@ class SpectroApp(tk.Tk):
                 self.measure_line.set_data(x, y)
                 self.measure_ax.set_title(f"Live Measurement for {lwl} nm | IT = {it_ms:.1f} ms | peak={peak:.0f}")
                 self.measure_ax.relim()
-                self.measure_ax.autoscale()
+                self.measure_ax.set_ylim(0, 65000)
                 if hasattr(self, 'measure_fig'):
                     self.measure_fig.canvas.draw_idle()
         except Exception as e:
@@ -1618,74 +1635,52 @@ class SpectroApp(tk.Tk):
             self._post_error("Save Data", e)
             return None
 
+    
     def run_analysis_and_save_plots(self, csv_path: str):
-        """Run comprehensive analysis and generate all plots from characterization script."""
-        try:
-            # Create plots folder
-            plots_folder = os.path.join(os.path.dirname(csv_path), "plots")
-            os.makedirs(plots_folder, exist_ok=True)
+            """Run comprehensive analysis and generate all plots using characterization_analysis.perform_characterization."""
+            try:
+                # Prepare output folder
+                plots_folder = os.path.join(os.path.dirname(csv_path), "plots")
+                os.makedirs(plots_folder, exist_ok=True)
 
-            # Load data
-            df = pd.read_csv(csv_path)
-            df["Wavelength"] = df["Wavelength"].astype(str)
+                # Load data
+                df = pd.read_csv(csv_path)
+                if "Wavelength" in df.columns:
+                    df["Wavelength"] = df["Wavelength"].astype(str)
 
-            # Get spectrometer serial number and timestamp for filenames
-            sn = getattr(self.spec, 'sn', 'UNKNOWN') if self.spec else 'UNKNOWN'
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Identify spectrometer
+                sn = getattr(self.spec, 'sn', 'UNKNOWN') if self.spec else 'UNKNOWN'
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # Generate all characterization plots
-            plot_paths = []
+                print("🔬 Starting comprehensive analysis via perform_characterization...")
+                result = perform_characterization(df, sn, plots_folder, timestamp)
 
-            print("🔬 Starting comprehensive analysis...")
+                # Collect saved figure paths
+                plot_paths: List[str] = []
+                if result and getattr(result, "artifacts", None):
+                    for art in result.artifacts:
+                        if getattr(art, "path", None) and os.path.isfile(art.path):
+                            plot_paths.append(art.path)
 
-            # 1. Normalized LSFs plot
-            plot_path = self._generate_normalized_lsfs_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
+                # Update UI with generated plots
+                self._update_analysis_display_tabs(plot_paths, csv_path)
 
-            # 2. 640nm OOR plot (if 640nm data exists)
-            plot_path = self._generate_640nm_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
+                # Write summary text if available
+                if result and getattr(result, "summary_lines", None):
+                    try:
+                        self.analysis_text.configure(state="normal")
+                        self.analysis_text.delete("1.0", "end")
+                        self.analysis_text.insert("end", "\n".join(result.summary_lines))
+                        self.analysis_text.configure(state="disabled")
+                    except Exception:
+                        pass
 
-            # 3. Hg-Ar peaks plot (if Hg-Ar data exists)
-            plot_path = self._generate_hgar_peaks_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
+                print(f"✅ Analysis complete. {len(plot_paths)} plots saved to: {plots_folder}")
+                return plot_paths
 
-            # 4. SDF plots (if enough laser data)
-            sdf_plots = self._generate_sdf_plots(df, plots_folder, sn, timestamp)
-            plot_paths.extend(sdf_plots)
-
-            # 5. Dispersion fit plot (if Hg-Ar data available)
-            plot_path = self._generate_dispersion_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
-
-            # 6. A2/A3 vs Wavelength plot
-            plot_path = self._generate_a2a3_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
-
-            # 7. Spectral Resolution plot
-            plot_path = self._generate_resolution_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
-
-            # 8. Slit Functions plot
-            plot_path = self._generate_slit_functions_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
-
-            # 9. Overlapped LSF comparison plot
-            plot_path = self._generate_lsf_comparison_plot(df, plots_folder, sn, timestamp)
-            if plot_path: plot_paths.append(plot_path)
-
-            # Update analysis tab with results (tabs format)
-            self._update_analysis_display_tabs(plot_paths, csv_path)
-
-            print(f"✅ Analysis complete! Generated {len(plot_paths)} plots")
-            return plot_paths
-
-        except Exception as e:
-            self._post_error("Analysis", e)
-            return []
-
-    # (Plot generation helper methods are kept unchanged from your original file; ensure they remain present.)
-    # For brevity I haven't duplicated every plot function here; in your codebase keep the original implementations.
+            except Exception as e:
+                self._post_error("Analysis Error", e)
+                return None
 
     def _update_analysis_display_tabs(self, plot_paths: List[str], csv_path: str):
         """Update analysis tab by creating a separate notebook tab for each generated plot image."""

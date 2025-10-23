@@ -31,20 +31,9 @@ def build(app):
         app.live_ax.set_title("Live Spectrum")
         app.live_ax.set_xlabel("Pixel")
         app.live_ax.set_ylabel("Counts")
-        app.live_line, = app.live_ax.plot([], [], lw=1, label="Signal", c="blue") # Set default color
+        app.live_line, = app.live_ax.plot([], [], lw=1, label="Signal")
         app.live_ax.grid(True)
         app.live_ax.legend(loc="upper right")
-
-        # --- ADDED: Saturation Text Artist ---
-        app.live_saturation_text = app.live_ax.text(
-            0.5, 0.5, "SATURATED",
-            ha="center", va="center",
-            fontsize=24, color="red",
-            fontweight="bold",
-            transform=app.live_ax.transAxes,
-            visible=False,
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", lw=2, alpha=0.9)
-        )
 
         app.live_canvas = FigureCanvasTkAgg(app.live_fig, master=left)
         app.live_canvas.draw()
@@ -191,39 +180,16 @@ def build(app):
                         except Exception:
                             pass
 
-                # --- FIX: GUARD FOR EMPTY DATA ---
-                y = np.array(app.spec.rcm, dtype=float)
-                if y is None or y.size == 0:
-                    # If data is empty (common on sat/error), skip this
-                    # frame and try again. This prevents clearing the plot.
-                    time.sleep(0.1) # Prevent spin-lock
-                    continue
-                # --- END FIX ---
-
                 # After IT changes (or none), fetch data and draw
+                y = np.array(app.spec.rcm, dtype=float)
                 x = np.arange(len(y))
                 app.npix = len(y)
                 app.data.npix = app.npix
-
-                # --- Check for saturation ---
-                is_saturated = getattr(app.spec, 'saturated', False)
-                
-                # Fallback: Check raw values (y.size > 0 is guaranteed here)
-                if not is_saturated:
-                    try:
-                        peak_val = np.nanmax(y)
-                        if peak_val >= getattr(app, 'SAT_THRESH', 65400):
-                            is_saturated = True
-                    except Exception:
-                        pass # ignore errors on empty/nan data
-
-                # Pass saturation state to the plot update function
-                app._update_live_plot(x, y, is_saturated)
+                app._update_live_plot(x, y)
 
             except Exception as e:
                 app._post_error("Live error", e)
-                # --- MODIFIED: Continue on error instead of breaking ---
-                continue # <-- This keeps the loop alive
+                break
 
 
     def _update_live_plot(self, x, y):
@@ -580,7 +546,7 @@ def build(app):
                 ymax = max(ymax, float(np.nanmax(dark))*1.1)
 
             app.meas_ax.set_xlim(0, xmax)
-            app.meas_ax.set_ylim(0, ymax)
+            app.meas_ax.set_ylim(0, 65000)
 
             # inset: Auto-IT step history (peaks & IT)
             steps = list(app.it_history) if hasattr(self, "it_history") else []

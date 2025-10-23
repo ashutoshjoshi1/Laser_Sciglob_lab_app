@@ -256,20 +256,11 @@ def build(app):
             app.stop_live()
             app.stop_measure()
             if app.spec:
-                try:
-                    app.spec.disconnect()
-                except Exception as e:
-                    print(f"Error disconnecting spectrometer: {e}")
-                    
-            if hasattr(app, 'lasers'):
-                for dev in [app.lasers.obis, app.lasers.cube, app.lasers.relay]:
-                    if dev:
-                        try:
-                            dev.close()
-                        except Exception as e:
-                            print(f"Error closing device: {e}")
-        except Exception as e:
-            print(f"Error in cleanup: {e}")
+                try: app.spec.disconnect()
+                except: pass
+            for dev in [app.lasers.obis, app.lasers.cube, app.lasers.relay]:
+                try: dev.close()
+                except: pass
         finally:
             app.destroy()
 

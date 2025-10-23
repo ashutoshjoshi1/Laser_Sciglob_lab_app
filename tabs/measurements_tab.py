@@ -24,6 +24,36 @@ def build(app):
         "640": 2,
     }
 
+    def _upload_reference_csv(app):
+        """Upload reference CSV file for analysis."""
+        try:
+            file_path = filedialog.askopenfilename(
+                title="Select Reference CSV File",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialdir=os.getcwd()
+            )
+
+            if file_path:
+                # Validate CSV structure
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(file_path)
+                    required_columns = ['Wavelength_nm', 'WavelengthOffset_nm', 'LSF_Normalized']
+
+                    if all(col in df.columns for col in required_columns):
+                        app.reference_csv_path = file_path
+                        filename = os.path.basename(file_path)
+                        app.reference_csv_label.config(text=filename, foreground="blue")
+                        messagebox.showinfo("Reference CSV", f"Successfully loaded:\n{filename}")
+                        print(f"✓ Reference CSV loaded: {file_path}")
+                    else:
+                        messagebox.showerror("Invalid CSV",
+                                           f"CSV must contain columns: {', '.join(required_columns)}")
+                except Exception as e:
+                    messagebox.showerror("CSV Error", f"Error reading CSV file:\n{e}")
+        except Exception as e:
+            messagebox.showerror("Upload Error", f"Error uploading file:\n{e}")
+
     def _build_measure_tab():
         # Create main container with better layout
         main_frame = ttk.Frame(app.measure_tab)
@@ -44,7 +74,7 @@ def build(app):
         app.measure_ax.set_xlabel("Pixel Index")
         app.measure_ax.set_ylabel("Counts")
         app.measure_ax.set_xticks(np.arange(0, 2048, 100))
-        app.measure_ax.set_ylim(0, 69000)
+        app.measure_ax.set_ylim(0, 65000)
         app.measure_ax.grid(True)
 
         # Initialize empty plot line
@@ -85,6 +115,19 @@ def build(app):
 
         ttk.Label(settings_frame, text="(Leave blank for defaults)",
                  font=("TkDefaultFont", 8)).pack(anchor="w")
+
+        # Reference CSV upload section
+        ttk.Label(settings_frame, text="Reference CSV:").pack(anchor="w", pady=(8, 4))
+
+        ref_frame = ttk.Frame(settings_frame)
+        ref_frame.pack(fill="x", pady=(0, 4))
+
+        app.reference_csv_label = ttk.Label(ref_frame, text="Pandora334_All_LSFs.csv",
+                                           foreground="gray", font=("TkDefaultFont", 8))
+        app.reference_csv_label.pack(side="left", fill="x", expand=True)
+
+        ttk.Button(ref_frame, text="📁", width=3,
+                  command=lambda: _upload_reference_csv(app)).pack(side="right")
 
         # Right side - Action buttons
         actions_frame = ttk.LabelFrame(controls_frame, text="Actions", padding=10)
@@ -317,7 +360,7 @@ def build(app):
                 except: pass
 
         app._ensure_source_state(tag, True)
-        time.sleep(1.0)  # allow source to stabilize
+        time.sleep(0.2)  # allow source to stabilize
 
         # pick start IT
         start_it = start_it_override if start_it_override is not None else app.DEFAULT_START_IT.get(tag, app.DEFAULT_START_IT["default"])
@@ -358,7 +401,7 @@ def build(app):
 
         try:
             app._ensure_source_state("640", True)
-            time.sleep(3.0)
+            time.sleep(1.0)
 
             for it_ms in integration_times:
                 if not app.measure_running.is_set():
@@ -408,7 +451,7 @@ def build(app):
                 break
             lbl.config(text=f"{s} sec")
             top.update()
-            time.sleep(1.0)
+            time.sleep(0.2)
         top.destroy()
 
     def _update_last_plots(self, tag: str):
@@ -430,7 +473,7 @@ def build(app):
                 ymax = max(ymax, float(np.nanmax(dark))*1.1)
 
             app.meas_ax.set_xlim(0, xmax)
-            app.meas_ax.set_ylim(0, ymax)
+            app.meas_ax.set_ylim(0, 65000)
 
             # inset: Auto-IT step history (peaks & IT)
             steps = list(app.it_history) if hasattr(self, "it_history") else []

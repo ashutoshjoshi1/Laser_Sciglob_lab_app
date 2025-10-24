@@ -316,7 +316,7 @@ class Avantes_Spectrometer():
         self.eff_saturation_limit=2**self.nbits-1 #(E) Effective saturation limit of the detector [max counts] (integer). Measurements containing counts above this limit will be considered as saturated.
 
         #Working mode:
-        self.abort_on_saturation=True #(E) boolean - If True, the measurement will be aborted as soon as saturated signal
+        self.abort_on_saturation=False #(E) boolean - If True, the measurement will be aborted as soon as saturated signal
         # is detected in the latest cycle read data. An order to abort the rest of the measurement will be sent to the spectrometer
         # and no more data will be handled from that moment. The output data would be still usable, but it would only
         # contain the non-saturated cycles (if any).

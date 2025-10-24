@@ -1010,6 +1010,12 @@ class SpectroApp(tk.Tk):
 
             # Initialize wrapper
             ava = Avantes_Spectrometer()
+            
+            # ==========================================================
+            # ==== MODIFICATION: Disable driver-level saturation abort ===
+            ava.abort_on_saturation = False
+            # ==========================================================
+            
             ava.dll_path = dll
             ava.alias = "Ava1"
             ava.npix_active = 2048
@@ -1551,32 +1557,28 @@ class SpectroApp(tk.Tk):
                     continue
 
                 peak = float(np.max(y))
-
-                # Quick anti-saturation guard
-                if peak >= SAT_THRESH:
-                    it_ms = max(IT_MIN, it_ms * 0.7)  # Aggressive step down
-                    adjust_iters += 1
-                    if adjust_iters > MAX_IT_ADJUST_ITERS:
-                        print(f"❌ {lwl} nm: Could not de-saturate within limit.")
-                        break
-                    continue
-
+                
                 # Update live plot in measurement tab
                 self._update_measurement_plot(y, lwl, it_ms, peak)
 
-                if TARGET_LOW <= peak <= TARGET_HIGH:
-                    print(f"✅ {lwl} nm: Good peak {peak:.1f} at IT={it_ms:.1f} ms")
+                # ==========================================================
+                # ==== MODIFICATION: Accept saturated peaks as success =====
+                
+                # Check if peak is high enough (in range OR saturated)
+                if peak >= TARGET_LOW:
+                    if peak >= SAT_THRESH:
+                        print(f"⚠️ {lwl} nm: Saturated peak {peak:.1f} at IT={it_ms:.1f} ms. Accepting.")
+                    else:
+                        print(f"✅ {lwl} nm: Good peak {peak:.1f} at IT={it_ms:.1f} ms")
                     success = True
-                    break
-
-                # Proportional-ish tweak around the mid target
-                err = TARGET_MID - peak
-                if err > 0:  # too dim
-                    delta = min(IT_STEP_UP, max(0.05, abs(err) / 5000.0))  # ms
-                    it_ms = min(IT_MAX, it_ms + delta)
-                else:  # too bright
-                    delta = min(IT_STEP_DOWN, max(0.05, abs(err) / 5000.0))  # ms
-                    it_ms = max(IT_MIN, it_ms - delta)
+                    break # Success, exit loop
+                
+                # If we are here, the peak is too dim (peak < TARGET_LOW)
+                err = TARGET_MID - peak # Error will be positive
+                delta = min(IT_STEP_UP, max(0.05, abs(err) / 5000.0))  # ms
+                it_ms = min(IT_MAX, it_ms + delta)
+                
+                # ==========================================================
 
                 adjust_iters += 1
                 if adjust_iters > MAX_IT_ADJUST_ITERS:
@@ -1642,24 +1644,19 @@ class SpectroApp(tk.Tk):
 
             peak = float(np.max(y))
 
-            # Anti-saturation guard
-            if peak >= SAT_THRESH:
-                it_ms = max(IT_MIN, it_ms * 0.7)
-                adjust_iters += 1
-                continue
-
-            # Check if in target range
-            if TARGET_LOW <= peak <= TARGET_HIGH:
+            # ==========================================================
+            # ==== MODIFICATION: Accept saturated peaks as success =====
+            
+            # Check if peak is high enough (in range OR saturated)
+            if peak >= TARGET_LOW:
                 return True, it_ms
 
-            # Adjust integration time
-            err = TARGET_MID - peak
-            if err > 0:  # too dim
-                delta = min(IT_STEP_UP, max(0.05, abs(err) / 5000.0))
-                it_ms = min(IT_MAX, it_ms + delta)
-            else:  # too bright
-                delta = min(IT_STEP_DOWN, max(0.05, abs(err) / 5000.0))
-                it_ms = max(IT_MIN, it_ms - delta)
+            # If we are here, the peak is too dim (peak < TARGET_LOW)
+            err = TARGET_MID - peak # Error will be positive
+            delta = min(IT_STEP_UP, max(0.05, abs(err) / 5000.0))
+            it_ms = min(IT_MAX, it_ms + delta)
+            
+            # ==========================================================
 
             adjust_iters += 1
 

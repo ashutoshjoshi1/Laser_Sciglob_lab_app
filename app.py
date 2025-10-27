@@ -848,7 +848,202 @@ class SpectroApp(tk.Tk):
                     pass
         self.analysis_canvases = []
 
-    def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
+    
+    # ---------------- Analysis sidebar helpers (vertical chart list) ----------------
+    def _ensure_analysis_sidebar(self) -> bool:
+        """Ensure analysis UI uses a left viewer + right vertical list instead of top tabs.
+        Returns True if the sidebar layout exists or was created, False otherwise."""
+        try:
+            if hasattr(self, 'analysis_display_frame') and hasattr(self, 'analysis_chart_list'):
+                # Make summary shorter if present
+                if hasattr(self, 'analysis_text'):
+                    try:
+                        self.analysis_text.configure(height=6)
+                    except Exception:
+                        pass
+                return True
+            # Build structure if we have a tab container
+            container = ttk.Frame(self.analysis_tab)
+            container.pack(fill="both", expand=True)
+    
+            body = ttk.Frame(container)
+            body.pack(fill="both", expand=True)
+    
+            self.analysis_display_frame = ttk.Frame(body)
+            self.analysis_display_frame.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=8)
+    
+            sidebar = ttk.Frame(body, width=260)
+            sidebar.pack(side="right", fill="y", padx=(4, 8), pady=8)
+    
+            ttk.Label(sidebar, text="Charts").pack(anchor="w")
+            self.analysis_chart_list = tk.Listbox(sidebar, exportselection=False)
+            self.analysis_chart_list.pack(fill="y", expand=True)
+            self.analysis_chart_list.bind("<<ListboxSelect>>", self._on_analysis_select)
+    
+            # Summary at bottom (shorter)
+            summary_frame = ttk.Frame(container)
+            summary_frame.pack(fill="x", padx=8, pady=(0, 8))
+            ttk.Label(summary_frame, text="Summary").pack(anchor="w")
+            if not hasattr(self, 'analysis_text'):
+                self.analysis_text = tk.Text(summary_frame, height=6, wrap="word")
+                self.analysis_text.pack(fill="x", expand=False)
+            else:
+                try:
+                    self.analysis_text.pack_forget()
+                except Exception:
+                    pass
+                self.analysis_text.master = summary_frame
+                self.analysis_text.configure(height=6)
+                self.analysis_text.pack(fill="x", expand=False)
+            return True
+        except Exception:
+            return False
+    
+    def _on_analysis_select(self, _evt=None):
+        try:
+            sel = self.analysis_chart_list.curselection()
+            if not sel:
+                return
+            idx = int(sel[0])
+            self._render_selected_analysis_figure(idx)
+        except Exception:
+            pass
+    
+    def _strip_datetime(self, text: str) -> str:
+        """Remove common date/time patterns from a string."""
+        import re as _re
+        if not text:
+            return text
+        patterns = [
+            r"\b\d4[-/]\d(1, 2)[-/]\d(1, 2)\b",    # 2025-10-27 or 2025/10/27
+            r"\b\d(1, 2)[-/]\d(1, 2)[-/]\d(2, 4)\b",  # 10/27/2025 or 10-27-25
+            r"\b\d(1, 2):\d2(:\d2)?(\s?[APMapm]{2})?\b", # 14:05, 2:05 PM
+            r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b",  # weekday
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b",  # month name
+        ]
+        out = text
+        for pat in patterns:
+            out = _re.sub(pat, '', out)
+        # collapse extra spaces and separators like ' -  - '
+        out = _re.sub(r"\s{2,}", ' ', out).strip(' -:_/\t')
+        return out.strip()
+    
+    def _sanitize_figure_titles(self, fig):
+        try:
+            # Remove or clean suptitle
+            st = getattr(fig, '_suptitle', None)
+            if st is not None:
+                txt = st.get_text()
+                st.set_text(self._strip_datetime(txt))
+        except Exception:
+            pass
+        try:
+            for ax in fig.get_axes():
+                try:
+                    title = ax.get_title()
+                    new_title = self._strip_datetime(title)
+                    if new_title != title:
+                        ax.set_title(new_title)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _render_selected_analysis_figure(self, idx: int):
+        # Clear previous
+        for child in list(self.analysis_display_frame.winfo_children()):
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        # Render figure
+        try:
+            fig = self._analysis_figures[idx]
+        except Exception:
+            return
+        try:
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+        except Exception:
+            FigureCanvasTkAgg = None  # type: ignore
+            NavigationToolbar2Tk = None  # type: ignore
+    
+        try:
+            if fig is not None and FigureCanvasTkAgg is not None:
+                self._sanitize_figure_titles(fig)
+                canvas = FigureCanvasTkAgg(fig, master=self.analysis_display_frame)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill="both", expand=True)
+                try:
+                    if NavigationToolbar2Tk is not None:
+                        NavigationToolbar2Tk(canvas, self.analysis_display_frame)
+                except Exception:
+                    pass
+                if not hasattr(self, 'analysis_canvases'):
+                    self.analysis_canvases = []
+                self.analysis_canvases.append(canvas)
+        except Exception:
+            pass
+    
+    def _populate_analysis_sidebar(self, csv_path: Optional[str] = None) -> None:
+        """Populate the vertical list and show first figure."""
+        # Clean existing list
+        try:
+            self.analysis_chart_list.delete(0, tk.END)
+        except Exception:
+            pass
+    
+        # Build figure list from artifacts (preferred) or skip to images
+        display_names = []
+        figures = []
+        if getattr(self, 'analysis_artifacts', None):
+            for art in self.analysis_artifacts:
+                name = getattr(art, 'name', 'Chart')
+                fig = getattr(art, 'figure', None)
+                if fig is None:
+                    continue
+                display_names.append(self._strip_datetime(str(name)))
+                figures.append(fig)
+    
+        # Save and render
+        self._analysis_figures = figures
+        for i, nm in enumerate(display_names):
+            try:
+                self.analysis_chart_list.insert(tk.END, nm or f"Chart {i+1}".format(i=i))
+            except Exception:
+                pass
+    
+        # Select first item
+        if display_names:
+            try:
+                self.analysis_chart_list.selection_clear(0, tk.END)
+                self.analysis_chart_list.selection_set(0)
+                self.analysis_chart_list.activate(0)
+            except Exception:
+                pass
+            self._render_selected_analysis_figure(0)
+def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
+    # Use new vertical list layout if available
+    if self._ensure_analysis_sidebar():
+        # Hide legacy notebook if it exists
+        try:
+            if hasattr(self, 'analysis_notebook'):
+                self.analysis_notebook.pack_forget()
+        except Exception:
+            pass
+        # Populate sidebar and summary
+        self._populate_analysis_sidebar(csv_path)
+        # Update summary text if present
+        if hasattr(self, 'analysis_summary_lines') and hasattr(self, 'analysis_text'):
+            summary_text = "\n".join(self.analysis_summary_lines) if self.analysis_summary_lines else ""
+            try:
+                self.analysis_text.configure(state="normal")
+                self.analysis_text.delete("1.0", "end")
+                self.analysis_text.insert("1.0", summary_text or "No analysis has been generated yet.")
+                self.analysis_text.configure(state="disabled")
+            except Exception:
+                pass
+        return
+
         if not hasattr(self, "analysis_notebook"):
             # create one if tab builder didn't
             try:

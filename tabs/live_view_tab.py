@@ -70,11 +70,16 @@ def build(app):
 
         ttk.Label(right, text="Laser Controls").pack(anchor="w")
         app.laser_vars = {}
+
         for tag in ["405", "445", "488", "377", "517", "532", "Hg_Ar"]:
             var = tk.BooleanVar(value=False)
+            label_text = f"{tag}" if tag == "Hg_Ar" else f"{tag} nm"
             btn = ttk.Checkbutton(
-                right, text=f"{tag} nm", variable=var,
-                command=lambda t=tag, v=var: app.toggle_laser(t, v.get()))
+                right,
+                text=label_text,
+                variable=var,
+                command=lambda t=tag, v=var: app.toggle_laser(t, v.get())
+            )
             btn.pack(anchor="w")
             app.laser_vars[tag] = var
 
@@ -280,7 +285,8 @@ def build(app):
         tags = ["405", "445", "488", "517", "532", "377", "Hg_Ar"]
         for i, tag in enumerate(tags):
             v = tk.BooleanVar(value=(tag in DEFAULT_ALL_LASERS))
-            chk = ttk.Checkbutton(mid, text=tag + " nm", variable=v)
+            label_text = tag if tag == "Hg_Ar" else f"{tag} nm"
+            chk = ttk.Checkbutton(mid, text=label_text, variable=v)
             chk.grid(row=1 + i // 6, column=(i % 6), padx=4, pady=4, sticky="w")
             app.measure_vars[tag] = v
 

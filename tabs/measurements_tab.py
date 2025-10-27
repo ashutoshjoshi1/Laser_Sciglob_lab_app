@@ -100,13 +100,39 @@ def build(app):
         # Create a grid layout for laser checkboxes
         for i, tag in enumerate(all_lasers):
             v = tk.BooleanVar(value=True)  # Default all selected like characterization script
-            chk = ttk.Checkbutton(laser_frame, text=f"{tag} nm", variable=v)
+            label_text = tag if tag == "Hg_Ar" else f"{tag} nm"
+            chk = ttk.Checkbutton(laser_frame, text=label_text, variable=v)
             chk.grid(row=i // 3, column=i % 3, padx=8, pady=4, sticky="w")
             app.measure_vars[tag] = v
+
 
         # Middle - Settings
         settings_frame = ttk.LabelFrame(controls_frame, text="Settings", padding=10)
         settings_frame.pack(side="left", fill="y", padx=6)
+
+        
+        # --- Target Peak Count (editable) ---
+        ttk.Label(settings_frame, text="Target Peak Count (mid):").pack(anchor="w", pady=(0, 4))
+        try:
+            default_mid = app.TARGET_MID if hasattr(app, "TARGET_MID") else 62500
+        except Exception:
+            default_mid = 62500
+        app.target_peak_var = tk.IntVar(value=default_mid)
+        app.target_peak_entry = ttk.Entry(settings_frame, width=12, textvariable=app.target_peak_var)
+        app.target_peak_entry.pack(anchor="w", pady=(0, 8))
+
+        # Optional: show current target window
+        try:
+            app.target_band_label = ttk.Label(settings_frame, text=f"Target window: {getattr(app, 'TARGET_LOW', default_mid-2500)}–{getattr(app, 'TARGET_HIGH', default_mid+2500)}")
+            app.target_band_label.pack(anchor="w", pady=(0, 8))
+        except Exception:
+            pass
+
+        # Update target window whenever user changes the value
+        try:
+            app.target_peak_var.trace_add("write", lambda *args: getattr(app, "update_target_peak", lambda v: None)(app.target_peak_var.get()))
+        except Exception:
+            pass
 
         ttk.Label(settings_frame, text="Auto-IT start (ms):").pack(anchor="w", pady=(0, 4))
         app.auto_it_entry = ttk.Entry(settings_frame, width=12)

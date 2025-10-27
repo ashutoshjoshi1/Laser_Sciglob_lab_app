@@ -2157,3 +2157,44 @@ class SpectroApp(tk.Tk):
                 os.system(f"xdg-open '{folder}' >/dev/null 2>&1 &")
         except Exception as exc:
             self._post_error("Open Folder", exc)
+
+
+    def update_target_peak(self, mid: int):
+        """Update the auto-IT target window (LOW/MID/HIGH) at runtime based on a user-set peak.
+        Keeps the original target band width (TARGET_HIGH - TARGET_LOW) constant.
+        """
+        try:
+            mid = int(mid)
+        except Exception:
+            return
+
+        try:
+            band = int(self.TARGET_HIGH - self.TARGET_LOW)
+        except Exception:
+            band = 5000  # default band width if unknown
+
+        half = max(1, band // 2)
+        low = max(0, mid - half)
+        try:
+            sat = int(self.SAT_THRESH)
+        except Exception:
+            sat = globals().get('SAT_THRESH', 65400)
+        high = min(sat, mid + half)
+
+        # Update globals used by functions that reference module-level constants
+        g = globals()
+        g['TARGET_LOW'] = low
+        g['TARGET_HIGH'] = high
+        g['TARGET_MID'] = mid
+
+        # Mirror on the instance for code that uses app.TARGET_*
+        self.TARGET_LOW = low
+        self.TARGET_HIGH = high
+        self.TARGET_MID = mid
+
+        # Lightly refresh any helper labels if present
+        try:
+            if hasattr(self, 'target_band_label'):
+                self.target_band_label.config(text=f'Target window: {low}–{high}')
+        except Exception:
+            pass

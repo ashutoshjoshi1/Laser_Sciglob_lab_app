@@ -74,7 +74,8 @@ def build(app):
         app.power_entries = {}
         row = 0
         for tag in ["405", "445", "488", "640", "377", "517", "532", "Hg_Ar"]:
-            ttk.Label(power_group, text=f"{tag} nm power:").grid(row=row, column=0, sticky="e", padx=4, pady=2)
+            label_text = tag if tag == "Hg_Ar" else f"{tag} nm"
+            ttk.Label(power_group, text=f"{label_text} power:").grid(row=row, column=0, sticky="e", padx=4, pady=2)
             e = ttk.Entry(power_group, width=12)
             e.insert(0, str(DEFAULT_LASER_POWERS.get(tag, 0.01)))
             e.grid(row=row, column=1, sticky="w", padx=4, pady=2)

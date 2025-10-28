@@ -1021,28 +1021,28 @@ class SpectroApp(tk.Tk):
             except Exception:
                 pass
             self._render_selected_analysis_figure(0)
-def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
-    # Use new vertical list layout if available
-    if self._ensure_analysis_sidebar():
-        # Hide legacy notebook if it exists
-        try:
-            if hasattr(self, 'analysis_notebook'):
-                self.analysis_notebook.pack_forget()
-        except Exception:
-            pass
-        # Populate sidebar and summary
-        self._populate_analysis_sidebar(csv_path)
-        # Update summary text if present
-        if hasattr(self, 'analysis_summary_lines') and hasattr(self, 'analysis_text'):
-            summary_text = "\n".join(self.analysis_summary_lines) if self.analysis_summary_lines else ""
+    def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
+        # Use new vertical list layout if available
+        if self._ensure_analysis_sidebar():
+            # Hide legacy notebook if it exists
             try:
-                self.analysis_text.configure(state="normal")
-                self.analysis_text.delete("1.0", "end")
-                self.analysis_text.insert("1.0", summary_text or "No analysis has been generated yet.")
-                self.analysis_text.configure(state="disabled")
+                if hasattr(self, 'analysis_notebook'):
+                    self.analysis_notebook.pack_forget()
             except Exception:
                 pass
-        return
+            # Populate sidebar and summary
+            self._populate_analysis_sidebar(csv_path)
+            # Update summary text if present
+            if hasattr(self, 'analysis_summary_lines') and hasattr(self, 'analysis_text'):
+                summary_text = "\n".join(self.analysis_summary_lines) if self.analysis_summary_lines else ""
+                try:
+                    self.analysis_text.configure(state="normal")
+                    self.analysis_text.delete("1.0", "end")
+                    self.analysis_text.insert("1.0", summary_text or "No analysis has been generated yet.")
+                    self.analysis_text.configure(state="disabled")
+                except Exception:
+                    pass
+            return
 
         if not hasattr(self, "analysis_notebook"):
             # create one if tab builder didn't
@@ -1496,6 +1496,7 @@ def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
                         self.lasers.relay_off(2)  # Hg-Ar lamp OFF
                         self.lasers.relay_off(3)  # 517 nm OFF
                         self.lasers.cube_on(power_mw=12)
+                        time.sleep(7) # 7 sec delay
                         print("377 nm turned ON")
                     except Exception as e:
                         print(f"Error turning on 377 nm: {e}")

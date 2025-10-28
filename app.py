@@ -1486,21 +1486,14 @@ class SpectroApp(tk.Tk):
 
                 # Turn on the specific laser (exactly like characterization script)
                 if lwl == "377":
-                    for ch in range(1, 6):
-                        try:
-                            self.lasers.obis_off(ch)
-                        except:
-                            pass
-                    try:
-                        self.lasers.relay_off(1)  # 532 nm OFF
-                        self.lasers.relay_off(2)  # Hg-Ar lamp OFF
-                        self.lasers.relay_off(3)  # 517 nm OFF
-                        self.lasers.cube_on(power_mw=12)
-                        time.sleep(7) # 7 sec delay
-                        print("377 nm turned ON")
-                    except Exception as e:
-                        print(f"Error turning on 377 nm: {e}")
-                        continue
+                    self.lasers.cube_on(power_mn = 12)
+                    time.sleep(3)
+                    print("377 nm turned ON")
+                    self.lasers.relay_off(1)
+                    self.lasers.relay_off(2)
+                    self.lasers.relay_off(3)
+                    for ch in range(1, 6): 
+                        self.lasers.obis_laser_off(ch)
 
                 elif lwl == "517":
                     for ch in range(1, 6):
@@ -1664,7 +1657,7 @@ class SpectroApp(tk.Tk):
             self._post_error("Measurement", e)
         finally:
             # Ensure all lasers are off
-            try:
+            try: 
                 for ch in range(1, 6):
                     self.lasers.obis_off(ch)
                 self.lasers.cube_off()

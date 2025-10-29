@@ -95,13 +95,13 @@ def build(app):
         laser_frame.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
         app.measure_vars = {}
-        # All lasers in ascending order
-        all_lasers = ["377", "405", "445", "488", "532", "640", "685"]
+        # All lasers in ascending order (including Hg_Ar)
+        all_lasers = ["377", "405", "445", "488", "532", "640", "685", "Hg_Ar"]
 
         # Create a grid layout for laser checkboxes
         for i, tag in enumerate(all_lasers):
             v = tk.BooleanVar(value=True)  # Default all selected like characterization script
-            label_text = f"{tag} nm"
+            label_text = f"{tag} nm" if tag != "Hg_Ar" else "Hg_Ar"
             chk = ttk.Checkbutton(laser_frame, text=label_text, variable=v)
             chk.grid(row=i // 3, column=i % 3, padx=8, pady=4, sticky="w")
             app.measure_vars[tag] = v

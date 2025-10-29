@@ -23,15 +23,17 @@ from scipy.signal import find_peaks
 class CharacterizationConfig:
     """Configuration constants that mirror the standalone script."""
 
-    laser_sequence: Sequence[str] = ("532", "445", "405", "377", "Hg_Ar")
+    laser_sequence: Sequence[str] = ("377", "405", "445", "488", "532", "640", "685", "Hg_Ar")
     laser_reference_map: Dict[str, float] = field(
         default_factory=lambda: {
             "377": 375.0,
             "405": 403.46,
             "445": 445.0,
+            "488": 488.0,
             "517": 517.0,
             "532": 532.0,
             "640": 640.0,
+            "685": 685.0,
         }
     )
     known_lines_nm: Sequence[float] = (
@@ -538,6 +540,26 @@ def perform_characterization(
     summary_lines.append("Dispersion Polynomial: λ(p) = " + " + ".join(terms))
     dispersion_poly = np.poly1d(disp_coeffs)
     dispersion_deriv = dispersion_poly.deriv()
+    
+    # --- Dispersion Fit plot -------------------------------------------
+    if len(comb_peak_pixels_sorted) >= 2:
+        fig_disp = Figure(figsize=(14, 6))
+        ax_disp = fig_disp.add_subplot(111)
+        pixels = np.arange(npix)
+        wavelengths_fitted = np.polyval(disp_coeffs, pixels)
+        ax_disp.plot(comb_peak_pixels_sorted, comb_wavelengths_sorted, 'ro', label='Laser + Lamp Peaks', markersize=8)
+        ax_disp.plot(pixels, wavelengths_fitted, 'b-', label='Dispersion Fit', linewidth=2)
+        ax_disp.set_xlabel("Pixel", fontsize=18)
+        ax_disp.set_ylabel("Wavelength (nm)", fontsize=18)
+        ax_disp.set_xticks(np.arange(0, npix + 50, 100))
+        ax_disp.tick_params(axis='both', labelsize=16)
+        ax_disp.set_title(f"Spectrometer= {sn}: Dispersion Fit")
+        ax_disp.grid(True)
+        ax_disp.legend(fontsize=14)
+        fig_disp.tight_layout()
+        path_disp = os.path.join(folder, f"Dispersion_Fit_{sn}_{timestamp}.png")
+        fig_disp.savefig(path_disp, dpi=300, bbox_inches="tight")
+        artifacts.append(AnalysisArtifact("Dispersion Fit", fig_disp, path_disp))
 
     A2_list: List[Tuple[float, float]] = []
     A3_list: List[Tuple[float, float]] = []
@@ -590,27 +612,63 @@ def perform_characterization(
         A3_list.append((wl_um, A3))
         C1_list.append((wl_um, C1))
 
-    fig_A2A3 = Figure(figsize=(10, 6))
-    ax_A = fig_A2A3.add_subplot(111)
+    # Fit polynomials to A2 and A3 for plotting and resolution calculation
+    A2_poly = None
+    A3_poly = None
+    if A2_list and len(A2_list) >= 2:
+        wl_um_A2, vals_A2 = zip(*A2_list)
+        A2_poly = _safe_polyfit(np.array(wl_um_A2), np.array(vals_A2), deg=min(2, len(A2_list)-1))
+    if A3_list and len(A3_list) >= 2:
+        wl_um_A3, vals_A3 = zip(*A3_list)
+        A3_poly = _safe_polyfit(np.array(wl_um_A3), np.array(vals_A3), deg=min(2, len(A3_list)-1))
+    
+    # --- A2/A3 vs Wavelength plot with polynomial fits -------------------
+    fig_A2A3 = Figure(figsize=(14, 6))
+    ax_A1 = fig_A2A3.add_subplot(1, 2, 1)
+    ax_A2 = fig_A2A3.add_subplot(1, 2, 2)
+    
+    # Subplot 1: A2 vs Wavelength
     if A2_list:
         wl_um, vals = zip(*A2_list)
-        ax_A.plot(np.array(wl_um) * 1000, vals, "o", label="A2")
+        wl_nm = np.array(wl_um) * 1000
+        ax_A1.plot(wl_nm, vals, 'ro', label='Measured A2', markersize=8)
+        if A2_poly is not None:
+            wl_fit = np.linspace(min(wl_nm), max(wl_nm), 100)
+            vals_fit = np.polyval(A2_poly, wl_fit / 1000.0)
+            ax_A1.plot(wl_fit, vals_fit, 'b-', label='Fitted A2', linewidth=2)
+    ax_A1.set_xlabel("Wavelength (nm)", fontsize=14)
+    ax_A1.set_ylabel("A2 (Width)", fontsize=14)
+    ax_A1.set_title(f"Spectrometer={sn}: A2 vs Wavelength")
+    ax_A1.grid(True)
+    ax_A1.legend(fontsize=12)
+    
+    # Subplot 2: A3 vs Wavelength
     if A3_list:
         wl_um3, vals3 = zip(*A3_list)
-        ax_A.plot(np.array(wl_um3) * 1000, vals3, "s", label="A3")
-    ax_A.set_xlabel("Wavelength (nm)")
-    ax_A.set_ylabel("Parameter Value")
-    ax_A.set_title(f"Spectrometer= {sn}: Slit Parameters A2/A3")
-    ax_A.grid(True)
-    ax_A.legend()
-    path6 = os.path.join(folder, f"Slit_Params_{sn}_{timestamp}.png")
+        wl_nm3 = np.array(wl_um3) * 1000
+        ax_A2.plot(wl_nm3, vals3, 'ro', label='Measured A3', markersize=8)
+        if A3_poly is not None:
+            wl_fit3 = np.linspace(min(wl_nm3), max(wl_nm3), 100)
+            vals_fit3 = np.polyval(A3_poly, wl_fit3 / 1000.0)
+            ax_A2.plot(wl_fit3, vals_fit3, 'b-', label='Fitted A3', linewidth=2)
+    ax_A2.set_xlabel("Wavelength (nm)", fontsize=14)
+    ax_A2.set_ylabel("A3 (Shape)", fontsize=14)
+    ax_A2.set_title(f"Spectrometer={sn}: A3 vs Wavelength")
+    ax_A2.grid(True)
+    ax_A2.legend(fontsize=12)
+    
+    fig_A2A3.tight_layout()
+    path6 = os.path.join(folder, f"A2_A3_vs_Wavelength_{sn}_{timestamp}.png")
     fig_A2A3.savefig(path6, dpi=300, bbox_inches="tight")
-    artifacts.append(AnalysisArtifact("Slit Parameters", fig_A2A3, path6))
+    artifacts.append(AnalysisArtifact("A2_A3_vs_Wavelength", fig_A2A3, path6))
 
     # --- Spectral resolution --------------------------------------------
     wv_range_nm = np.linspace(min(all_wavelengths, default=300), max(all_wavelengths, default=800), 200)
-    A2_poly = _safe_polyfit(np.array([wl for wl, _ in A2_list]), np.array([v for _, v in A2_list]), deg=2) if A2_list else np.array([0.0])
-    A3_poly = _safe_polyfit(np.array([wl for wl, _ in A3_list]), np.array([v for _, v in A3_list]), deg=2) if A3_list else np.array([0.0])
+    # Use polynomial fits calculated above
+    if A2_poly is None:
+        A2_poly = np.array([0.0])
+    if A3_poly is None:
+        A3_poly = np.array([0.0])
     A2_vals = np.polyval(A2_poly, wv_range_nm / 1000.0)
     A3_vals = np.polyval(A3_poly, wv_range_nm / 1000.0)
     fwhm_vals = 2 * A2_vals * (np.log(2)) ** (1 / np.maximum(A3_vals, 1e-6))

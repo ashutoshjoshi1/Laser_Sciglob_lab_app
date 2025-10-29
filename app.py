@@ -1550,9 +1550,12 @@ class SpectroApp(tk.Tk):
                 if lwl == "377":
                     # Ensure port is open before control (fix delay issue)
                     self.lasers.ensure_open_for_tag("377")
-                    self.lasers.cube_on(power_mw=12)
-                    time.sleep(3)
-                    print("377 nm turned ON")
+                    # Use power from UI settings (same logic as _ensure_source_state)
+                    val = float(self._get_power(lwl))
+                    mw = val * 1000.0 if val <= 0.3 else val
+                    self.lasers.cube_on(power_mw=mw)
+                    # time.sleep(3)
+                    print(f"377 nm turned ON at {mw} mW")
                     self.lasers.relay_off(1)
                     self.lasers.relay_off(2)
                     self.lasers.relay_off(3)
@@ -1706,6 +1709,9 @@ class SpectroApp(tk.Tk):
 
                 # Turn off laser (exactly like characterization script)
                 self._turn_off_laser(lwl)
+                
+                # Small delay to ensure laser is fully off before dark measurement
+                time.sleep(0.3)
 
                 # Take dark measurement
                 print(f"Taking dark measurement for {lwl} nm")
@@ -1736,7 +1742,9 @@ class SpectroApp(tk.Tk):
 
                 except Exception as e:
                     print(f"Error in dark measurement for {lwl} nm: {e}")
-
+                    # Continue to next laser even if dark measurement fails
+                    # Data will show signal but no dark correction available
+                
                 self.after(0, lambda l=lwl: self.title(f"Completed {l} nm"))
 
         except Exception as e:
@@ -1800,6 +1808,10 @@ class SpectroApp(tk.Tk):
         IT_STEP_DOWN = 0.1
         MAX_IT_ADJUST_ITERS = 1000
 
+        # Add 3 second delay for 377 nm laser when stepping up IT
+        if lwl == "377":
+            time.sleep(3.0)
+
         while True:
             if not self.measure_running.is_set():
                 return False, it_ms
@@ -1859,9 +1871,7 @@ class SpectroApp(tk.Tk):
                 delta = min(IT_STEP_UP, max(0.05, abs(err) / 5000.0))  # ms
                 it_ms = min(IT_MAX, it_ms + delta)
                 
-                # Add 3 second delay for 377 nm laser when stepping up IT
-                if lwl == "377":
-                    time.sleep(3.0)
+                
                 
                 # ==========================================================
 

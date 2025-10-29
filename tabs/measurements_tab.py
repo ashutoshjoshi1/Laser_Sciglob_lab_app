@@ -16,12 +16,13 @@ from datetime import datetime
 
 def build(app):
     # Import constants from app
-    DEFAULT_ALL_LASERS = ["405", "445", "488", "517", "532", "377", "Hg_Ar"]
+    DEFAULT_ALL_LASERS = ["377", "405", "445", "488", "532", "640", "685"]
     OBIS_LASER_MAP = {
         "405": 5,
         "445": 4,
         "488": 3,
         "640": 2,
+        "685": 6,
     }
 
     def _upload_reference_csv(app):
@@ -94,13 +95,13 @@ def build(app):
         laser_frame.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
         app.measure_vars = {}
-        # Use the same laser list as characterization script
-        all_lasers = ["532", "445", "405", "377", "Hg_Ar"]  # From characterization script
+        # All lasers in ascending order
+        all_lasers = ["377", "405", "445", "488", "532", "640", "685"]
 
         # Create a grid layout for laser checkboxes
         for i, tag in enumerate(all_lasers):
             v = tk.BooleanVar(value=True)  # Default all selected like characterization script
-            label_text = tag if tag == "Hg_Ar" else f"{tag} nm"
+            label_text = f"{tag} nm"
             chk = ttk.Checkbutton(laser_frame, text=label_text, variable=v)
             chk.grid(row=i // 3, column=i % 3, padx=8, pady=4, sticky="w")
             app.measure_vars[tag] = v

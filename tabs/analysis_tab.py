@@ -24,24 +24,33 @@ def build(app):
     app.analysis_display_frame = ttk.Frame(body)
     app.analysis_display_frame.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=(0, 8))
 
-    # Right: vertical list of charts
+    # Right: vertical list of chart buttons
     sidebar = ttk.Frame(body, width=260)
     sidebar.pack(side="right", fill="y", padx=(4, 8), pady=(0, 8))
     ttk.Label(sidebar, text="Charts").pack(anchor="w")
 
-    app.analysis_chart_list = tk.Listbox(sidebar, exportselection=False)
-    app.analysis_chart_list.pack(fill="y", expand=True)
-
-    def _proxy_select(evt=None):
-        # If the app implements a handler, forward the event
-        cb = getattr(app, "_on_analysis_select", None)
-        if callable(cb):
-            try:
-                cb(evt)
-            except Exception:
-                pass
-
-    app.analysis_chart_list.bind("<<ListboxSelect>>", _proxy_select)
+    # Frame to hold buttons with scrollbar
+    button_frame = ttk.Frame(sidebar)
+    button_frame.pack(fill="both", expand=True)
+    
+    # Canvas and scrollbar for button area
+    canvas = tk.Canvas(button_frame)
+    scrollbar = ttk.Scrollbar(button_frame, orient="vertical", command=canvas.yview)
+    scrollable_frame = ttk.Frame(canvas)
+    
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+    
+    # Store reference to scrollable frame for button creation
+    app.analysis_chart_button_frame = scrollable_frame
 
     # Bottom: shorter Summary
     summary_frame = ttk.Frame(container)

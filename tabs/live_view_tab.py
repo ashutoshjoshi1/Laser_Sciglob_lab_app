@@ -14,6 +14,7 @@ def build(app):
         "445": 4,
         "488": 3,
         "640": 2,
+        "685": 6,
     }
     IT_MIN = 0.2
     IT_MAX = 3000.0
@@ -71,9 +72,10 @@ def build(app):
         ttk.Label(right, text="Laser Controls").pack(anchor="w")
         app.laser_vars = {}
 
-        for tag in ["405", "445", "488", "377", "517", "532", "Hg_Ar"]:
+        # All lasers in ascending order
+        for tag in ["377", "405", "445", "488", "532", "640", "685"]:
             var = tk.BooleanVar(value=False)
-            label_text = f"{tag}" if tag == "Hg_Ar" else f"{tag} nm"
+            label_text = f"{tag} nm"
             btn = ttk.Checkbutton(
                 right,
                 text=label_text,
@@ -246,12 +248,25 @@ def build(app):
                     app.lasers.relay_on(1)
                 else:
                     app.lasers.relay_off(1)
-
-            elif tag == "Hg_Ar":
+            
+            elif tag == "640":
+                ch = OBIS_LASER_MAP[tag]
                 if turn_on:
-                    app.lasers.relay_on(2)
+                    watts = float(app._get_power(tag))
+                    app.lasers.obis_set_power(ch, watts)
+                    app.lasers.obis_on(ch)
                 else:
-                    app.lasers.relay_off(2)
+                    app.lasers.obis_off(ch)
+            
+            elif tag == "685":
+                # New 685 nm laser on OBIS
+                ch = OBIS_LASER_MAP[tag]
+                if turn_on:
+                    watts = float(app._get_power(tag))
+                    app.lasers.obis_set_power(ch, watts)
+                    app.lasers.obis_on(ch)
+                else:
+                    app.lasers.obis_off(ch)
 
         except Exception as e:
             app._post_error(f"Laser {tag}", e)

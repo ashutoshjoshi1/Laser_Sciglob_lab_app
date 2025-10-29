@@ -21,6 +21,7 @@ def build(app):
         "445": 4,
         "488": 3,
         "640": 2,
+        "685": 6,
     }
 
     def _build_setup_tab():
@@ -73,8 +74,9 @@ def build(app):
 
         app.power_entries = {}
         row = 0
-        for tag in ["405", "445", "488", "640", "377", "517", "532", "Hg_Ar"]:
-            label_text = tag if tag == "Hg_Ar" else f"{tag} nm"
+        # All lasers in ascending order
+        for tag in ["377", "405", "445", "488", "532", "640", "685"]:
+            label_text = f"{tag} nm"
             ttk.Label(power_group, text=f"{label_text} power:").grid(row=row, column=0, sticky="e", padx=4, pady=2)
             e = ttk.Entry(power_group, width=12)
             e.insert(0, str(DEFAULT_LASER_POWERS.get(tag, 0.01)))

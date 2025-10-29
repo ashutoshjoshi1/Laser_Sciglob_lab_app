@@ -61,22 +61,24 @@ OBIS_LASER_MAP = {
     "445": 4,
     "488": 3,
     "640": 2,
+    "685": 6,  # New laser
 }
 
 # Default powers (Watts for OBIS/CUBE setpoints, you can interpret as needed)
 DEFAULT_LASER_POWERS = {
+    "377": 0.012,  # CUBE laser
     "405": 0.005,
     "445": 0.003,
     "488": 0.030,
-    "640": 0.030,  # if you use 640 on OBIS group elsewhere
-    "377": 0.012,  # example for CUBE current or analog; adapt to your device
+    "532": 0.030,  # Changed from relay to OBIS power setting
+    "640": 0.030,
+    "685": 0.030,  # New laser default power
     "517": 1.000,  # relays are on/off, but keep a placeholder
-    "532": 1.000,
     "Hg_Ar": 1.000
 }
 
-# Automated measurement list (you can change from GUI too)
-DEFAULT_ALL_LASERS = ["532", "445", "405", "377", "Hg_Ar", "640"]
+# Automated measurement list (you can change from GUI too) - all in ascending order
+DEFAULT_ALL_LASERS = ["377", "405", "445", "488", "532", "640", "685"]
 
 # Integration time bounds (ms)
 IT_MIN = 0.2
@@ -876,9 +878,29 @@ class SpectroApp(tk.Tk):
             sidebar.pack(side="right", fill="y", padx=(4, 8), pady=8)
     
             ttk.Label(sidebar, text="Charts").pack(anchor="w")
-            self.analysis_chart_list = tk.Listbox(sidebar, exportselection=False)
-            self.analysis_chart_list.pack(fill="y", expand=True)
-            self.analysis_chart_list.bind("<<ListboxSelect>>", self._on_analysis_select)
+            
+            # Frame to hold buttons with scrollbar
+            button_frame = ttk.Frame(sidebar)
+            button_frame.pack(fill="both", expand=True)
+            
+            # Canvas and scrollbar for button area
+            canvas = tk.Canvas(button_frame)
+            scrollbar = ttk.Scrollbar(button_frame, orient="vertical", command=canvas.yview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            
+            # Store reference to scrollable frame for button creation
+            self.analysis_chart_button_frame = scrollable_frame
     
             # Summary at bottom (shorter)
             summary_frame = ttk.Frame(container)
@@ -899,13 +921,17 @@ class SpectroApp(tk.Tk):
         except Exception:
             return False
     
-    def _on_analysis_select(self, _evt=None):
+    def _on_analysis_select(self, idx: int):
+        """Handle chart button selection."""
         try:
-            sel = self.analysis_chart_list.curselection()
-            if not sel:
-                return
-            idx = int(sel[0])
             self._render_selected_analysis_figure(idx)
+            # Update button states to show selected state
+            if hasattr(self, '_analysis_buttons'):
+                for i, btn in enumerate(self._analysis_buttons):
+                    if i == idx:
+                        btn.configure(relief="sunken")
+                    else:
+                        btn.configure(relief="raised")
         except Exception:
             pass
     
@@ -985,10 +1011,12 @@ class SpectroApp(tk.Tk):
             pass
     
     def _populate_analysis_sidebar(self, csv_path: Optional[str] = None) -> None:
-        """Populate the vertical list and show first figure."""
-        # Clean existing list
+        """Populate the vertical button list and show first figure."""
+        # Clean existing buttons
         try:
-            self.analysis_chart_list.delete(0, tk.END)
+            if hasattr(self, 'analysis_chart_button_frame'):
+                for widget in self.analysis_chart_button_frame.winfo_children():
+                    widget.destroy()
         except Exception:
             pass
     
@@ -1006,21 +1034,29 @@ class SpectroApp(tk.Tk):
     
         # Save and render
         self._analysis_figures = figures
-        for i, nm in enumerate(display_names):
-            try:
-                self.analysis_chart_list.insert(tk.END, nm or f"Chart {i+1}".format(i=i))
-            except Exception:
-                pass
+        self._analysis_buttons = []
+        
+        if hasattr(self, 'analysis_chart_button_frame'):
+            for i, nm in enumerate(display_names):
+                try:
+                    # Create button for each chart
+                    btn = ttk.Button(
+                        self.analysis_chart_button_frame,
+                        text=nm or f"Chart {i+1}",
+                        command=lambda idx=i: self._on_analysis_select(idx),
+                        width=25
+                    )
+                    btn.pack(fill="x", padx=4, pady=2)
+                    self._analysis_buttons.append(btn)
+                except Exception:
+                    pass
     
-        # Select first item
+        # Select and render first item
         if display_names:
             try:
-                self.analysis_chart_list.selection_clear(0, tk.END)
-                self.analysis_chart_list.selection_set(0)
-                self.analysis_chart_list.activate(0)
+                self._on_analysis_select(0)
             except Exception:
                 pass
-            self._render_selected_analysis_figure(0)
     def _update_analysis_ui(self, csv_path: Optional[str] = None) -> None:
         # Use new vertical list layout if available
         if self._ensure_analysis_sidebar():
@@ -1028,6 +1064,12 @@ class SpectroApp(tk.Tk):
             try:
                 if hasattr(self, 'analysis_notebook'):
                     self.analysis_notebook.pack_forget()
+            except Exception:
+                pass
+            # Hide listbox if it exists (old layout)
+            try:
+                if hasattr(self, 'analysis_chart_list'):
+                    self.analysis_chart_list.pack_forget()
             except Exception:
                 pass
             # Populate sidebar and summary
@@ -1399,6 +1441,16 @@ class SpectroApp(tk.Tk):
                     self.lasers.relay_on(1)
                 else:
                     self.lasers.relay_off(1)
+            
+            elif tag == "685":
+                # New 685 nm laser on OBIS
+                ch = OBIS_LASER_MAP[tag]
+                if turn_on:
+                    watts = float(self._get_power(tag))
+                    self.lasers.obis_set_power(ch, watts)
+                    self.lasers.obis_on(ch)
+                else:
+                    self.lasers.obis_off(ch)
 
             elif tag == "Hg_Ar":
                 if turn_on:
@@ -1444,6 +1496,16 @@ class SpectroApp(tk.Tk):
                 self.lasers.relay_on(1)
             else:
                 self.lasers.relay_off(1)
+        
+        elif tag == "685":
+            # New 685 nm laser on OBIS
+            ch = OBIS_LASER_MAP[tag]
+            if turn_on:
+                pwr = float(self._get_power(tag))
+                self.lasers.obis_set_power(ch, pwr)
+                self.lasers.obis_on(ch)
+            else:
+                self.lasers.obis_off(ch)
 
         elif tag == "Hg_Ar":
             if turn_on:
@@ -1461,7 +1523,7 @@ class SpectroApp(tk.Tk):
         """Run measurement sequence for selected lasers (exactly like spectrometer_characterization.py)."""
         try:
             # Turn off all lasers initially (exactly like characterization script)
-            for ch in range(1, 6):
+            for ch in range(1, 7):
                 try:
                     self.lasers.obis_off(ch)
                 except:
@@ -1486,24 +1548,26 @@ class SpectroApp(tk.Tk):
 
                 # Turn on the specific laser (exactly like characterization script)
                 if lwl == "377":
-                    self.lasers.cube_on(power_mn = 12)
+                    # Ensure port is open before control (fix delay issue)
+                    self.lasers.ensure_open_for_tag("377")
+                    self.lasers.cube_on(power_mw=12)
                     time.sleep(3)
                     print("377 nm turned ON")
                     self.lasers.relay_off(1)
                     self.lasers.relay_off(2)
                     self.lasers.relay_off(3)
-                    for ch in range(1, 6): 
-                        self.lasers.obis_laser_off(ch)
+                    for ch in range(1, 7): 
+                        self.lasers.obis_off(ch)
 
                 elif lwl == "517":
-                    for ch in range(1, 6):
+                    for ch in range(1, 7):
                         try:
                             self.lasers.obis_off(ch)
                         except:
                             pass
                     try:
                         self.lasers.cube_off()
-                        self.lasers.relay_off(1)  # 532 nm OFF
+                        # Note: 532 nm is now on OBIS, handled separately
                         self.lasers.relay_off(2)  # Hg-Ar lamp OFF
                         self.lasers.relay_on(3)
                         print("517 nm turned ON")
@@ -1512,7 +1576,8 @@ class SpectroApp(tk.Tk):
                         continue
 
                 elif lwl == "532":
-                    for ch in range(1, 6):
+                    # 532 nm is on RELAY
+                    for ch in range(1, 7):
                         try:
                             self.lasers.obis_off(ch)
                         except:
@@ -1521,14 +1586,37 @@ class SpectroApp(tk.Tk):
                         self.lasers.cube_off()
                         self.lasers.relay_off(2)  # Hg-Ar lamp OFF
                         self.lasers.relay_off(3)  # 517 nm OFF
-                        self.lasers.relay_on(1)
+                        self.lasers.relay_on(1)  # 532 nm ON
                         print("532 nm turned ON")
                     except Exception as e:
                         print(f"Error turning on 532 nm: {e}")
                         continue
+                
+                elif lwl == "685":
+                    # New 685 nm laser on OBIS
+                    for ch in range(1, 7):
+                        try:
+                            if ch != OBIS_LASER_MAP["685"]:
+                                self.lasers.obis_off(ch)
+                        except:
+                            pass
+                    try:
+                        self.lasers.cube_off()
+                        self.lasers.relay_off(1)
+                        self.lasers.relay_off(2)  # Hg-Ar lamp OFF
+                        self.lasers.relay_off(3)  # 517 nm OFF
+                        # Turn on 685 nm via OBIS
+                        ch = OBIS_LASER_MAP["685"]
+                        laser_power = self._get_power("685")
+                        self.lasers.obis_set_power(ch, laser_power)
+                        self.lasers.obis_on(ch)
+                        print("685 nm turned ON")
+                    except Exception as e:
+                        print(f"Error turning on 685 nm: {e}")
+                        continue
 
                 elif lwl == "Hg_Ar":
-                    for ch in range(1, 6):
+                    for ch in range(1, 7):
                         try:
                             self.lasers.obis_off(ch)
                         except:
@@ -1547,7 +1635,7 @@ class SpectroApp(tk.Tk):
                         print(f"Error turning on Hg-Ar: {e}")
                         continue
 
-                else:  # OBIS lasers (405, 445, 488, 640)
+                else:  # OBIS lasers (405, 445, 488, 640, 685)
                     try:
                         self.lasers.cube_off()
                         self.lasers.relay_off(1)  # 532 nm OFF
@@ -1556,13 +1644,11 @@ class SpectroApp(tk.Tk):
 
                         if lwl in OBIS_LASER_MAP:
                             ch = OBIS_LASER_MAP[lwl]
+                            # Set power from UI or defaults
+                            laser_power = self._get_power(lwl)
+                            self.lasers.obis_set_power(ch, laser_power)
                             self.lasers.obis_on(ch)
                             print(f'{lwl} nm turned ON')
-
-                            # Set power from characterization script
-                            laser_power = {"405": 0.005, "445": 0.003, "488": 0.03, "640": 0.03}
-                            if lwl in laser_power:
-                                self.lasers.obis_set_power(ch, laser_power[lwl])
                     except Exception as e:
                         print(f"Error turning on {lwl} nm: {e}")
                         continue
@@ -1658,7 +1744,7 @@ class SpectroApp(tk.Tk):
         finally:
             # Ensure all lasers are off
             try: 
-                for ch in range(1, 6):
+                for ch in range(1, 7):
                     self.lasers.obis_off(ch)
                 self.lasers.cube_off()
                 self.lasers.relay_off(1)
@@ -1681,6 +1767,12 @@ class SpectroApp(tk.Tk):
             elif lwl == "532":
                 self.lasers.relay_off(1)
                 print("532 nm turned OFF")
+            elif lwl == "685":
+                # New 685 nm laser on OBIS
+                if lwl in OBIS_LASER_MAP:
+                    ch = OBIS_LASER_MAP[lwl]
+                    self.lasers.obis_off(ch)
+                print("685 nm turned OFF")
             elif lwl == "Hg_Ar":
                 self.lasers.relay_off(2)
                 print("Hg-Ar lamp turned OFF")
@@ -1766,6 +1858,10 @@ class SpectroApp(tk.Tk):
                 err = TARGET_MID - peak # Error will be positive
                 delta = min(IT_STEP_UP, max(0.05, abs(err) / 5000.0))  # ms
                 it_ms = min(IT_MAX, it_ms + delta)
+                
+                # Add 3 second delay for 377 nm laser when stepping up IT
+                if lwl == "377":
+                    time.sleep(3.0)
                 
                 # ==========================================================
 
@@ -1927,77 +2023,56 @@ class SpectroApp(tk.Tk):
                 return None
 
     def _update_analysis_display_tabs(self, plot_paths: List[str], csv_path: str):
-        """Update analysis tab by creating a separate notebook tab for each generated plot image."""
+        """Update analysis tab by creating buttons for each generated plot image."""
         try:
-            # Ensure we have an analysis notebook reference (created by the analysis tab builder)
-            if not hasattr(self, 'analysis_notebook'):
-                # If not present, create one inside self.analysis_tab
-                self.analysis_notebook = ttk.Notebook(self.analysis_tab)
-                self.analysis_notebook.pack(fill="both", expand=True)
-
-            # Clear existing tabs & canvases
-            self._clear_analysis_notebook()
+            # Ensure sidebar layout exists
+            self._ensure_analysis_sidebar()
+            
+            # Clear existing buttons
+            if hasattr(self, 'analysis_chart_button_frame'):
+                for widget in self.analysis_chart_button_frame.winfo_children():
+                    widget.destroy()
+            
+            # Clear existing canvases
+            if hasattr(self, 'analysis_canvases'):
+                for canvas in self.analysis_canvases:
+                    try:
+                        if hasattr(canvas, 'get_tk_widget'):
+                            canvas.get_tk_widget().destroy()
+                        elif isinstance(canvas, tk.Widget):
+                            canvas.destroy()
+                    except Exception:
+                        pass
+                self.analysis_canvases = []
 
             if not plot_paths:
                 if hasattr(self, 'analysis_status_var'):
                     self.analysis_status_var.set("No plots were generated. Check measurement data.")
                 return
 
-            # Iterate and create one tab per plot image
+            # Store plot paths and create buttons
             plot_names = []
-            for p in plot_paths:
-                display_name = os.path.basename(p).replace('.png', '')
-                plot_names.append(display_name)
+            self._analysis_plot_paths = plot_paths
+            self._analysis_buttons = []
+            
+            if hasattr(self, 'analysis_chart_button_frame'):
+                for i, p in enumerate(plot_paths):
+                    display_name = os.path.basename(p).replace('.png', '')
+                    plot_names.append(display_name)
+                    
+                    # Create button for each plot
+                    btn = ttk.Button(
+                        self.analysis_chart_button_frame,
+                        text=display_name,
+                        command=lambda idx=i: self._load_plot_from_path(idx),
+                        width=25
+                    )
+                    btn.pack(fill="x", padx=4, pady=2)
+                    self._analysis_buttons.append(btn)
 
-                frame = ttk.Frame(self.analysis_notebook)
-                self.analysis_notebook.add(frame, text=display_name)
-
-                # Load image into this tab's frame
-                try:
-                    from PIL import Image, ImageTk
-                    img = Image.open(p)
-                    # Resize for display while keeping original available for scroll
-                    max_w, max_h = 1100, 750
-                    if img.width > max_w or img.height > max_h:
-                        try:
-                            resample = Image.Resampling.LANCZOS
-                        except AttributeError:
-                            resample = Image.LANCZOS
-                        img_thumb = img.copy()
-                        img_thumb.thumbnail((max_w, max_h), resample)
-                    else:
-                        img_thumb = img
-
-                    photo = ImageTk.PhotoImage(img_thumb)
-
-                    # Create canvas + scrollbars so user can view large images
-                    canvas = tk.Canvas(frame, bg='white')
-                    vsb = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-                    hsb = ttk.Scrollbar(frame, orient="horizontal", command=canvas.xview)
-                    canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-
-                    vsb.pack(side="right", fill="y")
-                    hsb.pack(side="bottom", fill="x")
-                    canvas.pack(side="left", fill="both", expand=True)
-
-                    # Place the image
-                    canvas.create_image(0, 0, anchor="nw", image=photo)
-                    canvas.image = photo  # keep reference
-                    # Set the scroll region to the image size
-                    try:
-                        canvas.configure(scrollregion=(0, 0, img_thumb.width, img_thumb.height))
-                    except Exception:
-                        canvas.configure(scrollregion=canvas.bbox("all"))
-
-                    # Save original file path reference for potential export/use
-                    if not hasattr(self, 'analysis_canvases'):
-                        self.analysis_canvases = []
-                    self.analysis_canvases.append(canvas)
-
-                except ImportError:
-                    ttk.Label(frame, text=f"Plot saved to:\n{p}\n\n(Install Pillow to view plots in GUI)", justify="center").pack(expand=True)
-                except Exception as e:
-                    ttk.Label(frame, text=f"Error loading plot {p}:\n{e}", justify="center").pack(expand=True)
+            # Load first plot by default
+            if plot_names:
+                self._load_plot_from_path(0)
 
             # Update status
             if hasattr(self, 'analysis_status_var'):
@@ -2034,23 +2109,23 @@ class SpectroApp(tk.Tk):
                     summary_text += f"{desc or name}\n"
                     if desc:
                         # add short help lines
-                        if "Normalized Line Spread Functions" in d:
+                        if "Normalized Line Spread Functions" in desc:
                             summary_text += "   → Shows the fundamental response of the spectrometer to monochromatic sources\n\n"
-                        elif "640 nm Measurements" in d:
+                        elif "640 nm Measurements" in desc:
                             summary_text += "   → Characterizes stray light from out-of-range wavelengths\n\n"
-                        elif "Hg-Ar Lamp Spectrum" in d:
+                        elif "Hg-Ar Lamp Spectrum" in desc:
                             summary_text += "   → Wavelength calibration using known Mercury-Argon emission lines\n\n"
-                        elif "Stray Light Distribution" in d:
+                        elif "Stray Light Distribution" in desc:
                             summary_text += "   → Visualizes how light scatters between pixels\n\n"
-                        elif "Dispersion Fit" in d:
+                        elif "Dispersion Fit" in desc:
                             summary_text += "   → Shows pixel-to-wavelength mapping accuracy\n\n"
-                        elif "Slit Function Parameters" in d:
+                        elif "Slit Function Parameters" in desc:
                             summary_text += "   → Width and shape parameters vs wavelength\n\n"
-                        elif "Spectral Resolution" in d:
+                        elif "Spectral Resolution" in desc:
                             summary_text += "   → Resolution performance compared to reference instruments\n\n"
-                        elif "Modeled Slit Functions" in d:
+                        elif "Modeled Slit Functions" in desc:
                             summary_text += "   → Theoretical slit function shapes at different wavelengths\n\n"
-                        elif "Overlaid Normalized LSFs" in d:
+                        elif "Overlaid Normalized LSFs" in desc:
                             summary_text += "   → Comparison of measured LSFs from lasers and lamp sources\n\n"
 
                 self.analysis_text.configure(state="normal")
@@ -2077,6 +2152,25 @@ class SpectroApp(tk.Tk):
         pass
 
     # Keep a helper to load a single plot into an arbitrary frame if needed elsewhere
+    def _load_plot_from_path(self, idx: int):
+        """Load and display a plot image from the stored path list."""
+        try:
+            if not hasattr(self, '_analysis_plot_paths') or idx >= len(self._analysis_plot_paths):
+                return
+            
+            plot_path = self._analysis_plot_paths[idx]
+            self._load_plot_into_frame(self.analysis_display_frame, plot_path)
+            
+            # Update button states to show selected
+            if hasattr(self, '_analysis_buttons'):
+                for i, btn in enumerate(self._analysis_buttons):
+                    if i == idx:
+                        btn.configure(relief="sunken")
+                    else:
+                        btn.configure(relief="raised")
+        except Exception as e:
+            print(f"Error loading plot from path: {e}")
+    
     def _load_plot_into_frame(self, parent_frame: ttk.Frame, plot_path: str):
         """Load a single PNG plot into the given frame (scrollable)."""
         try:

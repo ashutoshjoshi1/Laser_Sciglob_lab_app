@@ -277,6 +277,7 @@ def perform_characterization(
     folder: str,
     timestamp: Optional[str] = None,
     config: Optional[CharacterizationConfig] = None,
+    reference_csv_path: Optional[str] = None,
 ) -> CharacterizationResult:
     if config is None:
         config = CharacterizationConfig()
@@ -709,6 +710,8 @@ def perform_characterization(
     fig_overlay = Figure(figsize=(9, 10))
     ax1 = fig_overlay.add_subplot(211)
     ax2 = fig_overlay.add_subplot(212, sharex=ax1)
+    
+    # Plot laser LSFs
     for lsf, peak_pixel, λ0 in zip(lsfs, pixel_locations_arr, laser_wavelengths_arr):
         disp_nm_per_pixel = float(dispersion_deriv(peak_pixel)) if dispersion_deriv.order >= 0 else 0.0
         center = int(np.nanargmax(lsf))
@@ -717,6 +720,30 @@ def perform_characterization(
         fwhm = compute_fwhm(x, lsf_norm)
         fw20 = compute_width_at_percent_max(x, lsf_norm, percent=0.2)
         ax1.plot(x, lsf_norm, label=f"{λ0:.0f} nm, FWHM={fwhm:.2f} nm, FW_20%={fw20:.2f} nm")
+    
+    # Overlay reference CSV data if provided (for Normalized LSFs of Lasers plot)
+    if reference_csv_path and os.path.exists(reference_csv_path):
+        try:
+            df_ref = pd.read_csv(reference_csv_path)
+            # Extract wavelengths from the reference CSV (should have "Wavelength_nm" column)
+            if "Wavelength_nm" in df_ref.columns:
+                ref_wavelengths = df_ref["Wavelength_nm"].unique()
+                # Try to match with laser wavelengths, or use all if no match
+                percent_height_ref = 0.01  # Using 1% like original script for reference overlays
+                for λ0_ref in ref_wavelengths:
+                    df_w = df_ref[df_ref["Wavelength_nm"] == λ0_ref]
+                    if not df_w.empty and "WavelengthOffset_nm" in df_w.columns and "LSF_Normalized" in df_w.columns:
+                        x_ref = df_w["WavelengthOffset_nm"].values
+                        y_ref = df_w["LSF_Normalized"].values
+                        fwhm_ref = compute_fwhm(x_ref, y_ref)
+                        fw1_ref = compute_width_at_percent_max(x_ref, y_ref, percent=percent_height_ref)
+                        # Use dashed line for reference (similar to original script)
+                        ax1.plot(x_ref, y_ref, '--', linewidth=2,
+                               label=f'Ref {λ0_ref:.0f} nm, FWHM={fwhm_ref:.2f} nm, FW_{int(percent_height_ref*100)}%={fw1_ref:.2f} nm',
+                               color='orange', alpha=0.7)
+        except Exception as e:
+            print(f"⚠️ Could not load reference CSV {reference_csv_path}: {e}")
+    
     ax1.set_yscale("log")
     ax1.set_title(f"Spectrometer = {sn}: Normalized LSFs of Lasers")
     ax1.set_ylabel("Normalized Intensity")

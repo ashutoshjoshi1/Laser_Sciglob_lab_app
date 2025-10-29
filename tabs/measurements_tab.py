@@ -201,6 +201,9 @@ def build(app):
 
         # Clear previous data
         app.data.rows.clear()
+        
+        # Clear analysis window when new measurement starts
+        app.after(0, lambda: app._clear_analysis_window())
 
         app.measure_running.set()
         app.measure_thread = threading.Thread(

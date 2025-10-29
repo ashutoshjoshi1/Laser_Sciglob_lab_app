@@ -849,6 +849,42 @@ class SpectroApp(tk.Tk):
                 except Exception:
                     pass
         self.analysis_canvases = []
+    
+    def _clear_analysis_window(self) -> None:
+        """Clear the analysis window when starting a new measurement."""
+        try:
+            # Clear sidebar buttons
+            if hasattr(self, 'analysis_chart_button_frame'):
+                for widget in self.analysis_chart_button_frame.winfo_children():
+                    widget.destroy()
+            if hasattr(self, '_analysis_buttons'):
+                self._analysis_buttons = []
+            if hasattr(self, '_analysis_figures'):
+                self._analysis_figures = []
+            if hasattr(self, 'analysis_artifacts'):
+                self.analysis_artifacts = []
+            if hasattr(self, '_analysis_plot_paths'):
+                self._analysis_plot_paths = []
+            
+            # Clear display frame
+            if hasattr(self, 'analysis_display_frame'):
+                for widget in self.analysis_display_frame.winfo_children():
+                    widget.destroy()
+            
+            # Clear summary text
+            if hasattr(self, 'analysis_text'):
+                try:
+                    self.analysis_text.configure(state="normal")
+                    self.analysis_text.delete("1.0", "end")
+                    self.analysis_text.insert("1.0", "Starting new measurement...")
+                    self.analysis_text.configure(state="disabled")
+                except Exception:
+                    pass
+            
+            # Clear old notebook if it exists
+            self._clear_analysis_notebook()
+        except Exception as e:
+            print(f"⚠️ Error clearing analysis window: {e}")
 
     
     # ---------------- Analysis sidebar helpers (vertical chart list) ----------------
@@ -1666,7 +1702,7 @@ class SpectroApp(tk.Tk):
                 it_ms = start_it_override if start_it_override else START_IT_DICT.get(lwl, START_IT_DICT["default"])
 
                 # Auto-adjust integration time with proper delays (non-blocking internal calls)
-                success, final_it = self._auto_adjust_integration_time_with_plot(lwl, it_ms)
+                success, final_it, final_peak = self._auto_adjust_integration_time_with_plot(lwl, it_ms)
 
                 if not success:
                     print(f"❌ {lwl} nm: Could not achieve target integration time")
@@ -1674,8 +1710,16 @@ class SpectroApp(tk.Tk):
                     self._turn_off_laser(lwl)
                     continue
 
+                # Check if peak is in target range (exactly like characterization script line 383)
+                TARGET_LOW = 60000
+                TARGET_HIGH = 65000
+                if not (TARGET_LOW <= final_peak <= TARGET_HIGH):
+                    print(f"❌ {lwl} nm: Peak {final_peak:.1f} not in target range [{TARGET_LOW}, {TARGET_HIGH}]")
+                    self._turn_off_laser(lwl)
+                    continue
+
                 # Take signal measurement (exactly like characterization script)
-                print(f"Taking signal measurement for {lwl} nm at IT={final_it:.1f} ms")
+                print(f"Taking signal measurement for {lwl} nm at IT={final_it:.1f} ms (peak={final_peak:.1f})")
 
                 try:
                     # set IT safely
@@ -1710,8 +1754,8 @@ class SpectroApp(tk.Tk):
                 # Turn off laser (exactly like characterization script)
                 self._turn_off_laser(lwl)
                 
-                # Small delay to ensure laser is fully off before dark measurement
-                time.sleep(0.3)
+                # Delay to ensure laser is fully off before dark measurement (exactly like original: 2 seconds)
+                time.sleep(2)
 
                 # Take dark measurement
                 print(f"Taking dark measurement for {lwl} nm")
@@ -1792,8 +1836,10 @@ class SpectroApp(tk.Tk):
         except Exception as e:
             print(f"Error turning off {lwl} nm: {e}")
 
-    def _auto_adjust_integration_time_with_plot(self, lwl: str, start_it: float) -> Tuple[bool, float]:
-        """Auto-adjust integration time with live plotting (exactly like characterization script)."""
+    def _auto_adjust_integration_time_with_plot(self, lwl: str, start_it: float) -> Tuple[bool, float, float]:
+        """Auto-adjust integration time with live plotting (exactly like characterization script).
+        Returns: (success, final_it, final_peak)
+        """
         it_ms = start_it
         adjust_iters = 0
         success = False
@@ -1814,21 +1860,21 @@ class SpectroApp(tk.Tk):
 
         while True:
             if not self.measure_running.is_set():
-                return False, it_ms
+                return False, it_ms, peak
 
             try:
                 # set IT safely
                 ret_set = self._safe_spec_call(lambda: self.spec.set_it(it_ms) if self.spec else None)
                 if ret_set is None and not self.spec:
-                    return False, it_ms
+                    return False, it_ms, peak
 
                 ret_meas = self._safe_spec_call(lambda: self.spec.measure(ncy=1) if self.spec else None)
                 if ret_meas is None and not self.spec:
-                    return False, it_ms
+                    return False, it_ms, peak
 
                 ret_wait = self._safe_spec_call(lambda: self.spec.wait_for_measurement() if self.spec else None)
                 if ret_wait is None and not self.spec:
-                    return False, it_ms
+                    return False, it_ms, peak
 
                 # retrieve spectrum
                 try:
@@ -1839,7 +1885,7 @@ class SpectroApp(tk.Tk):
                         y = np.array(self.spec.rcm, dtype=float)
                 except Exception as e:
                     self._handle_avaspec_error(e, context="_auto_adjust_integration_time_with_plot: reading rcm")
-                    return False, it_ms
+                    return False, it_ms, peak
 
                 if y.size == 0:
                     print(f"⚠️ {lwl} nm: No data received. Retrying...")
@@ -1857,14 +1903,17 @@ class SpectroApp(tk.Tk):
                 # ==========================================================
                 # ==== MODIFICATION: Accept saturated peaks as success =====
                 
-                # Check if peak is high enough (in range OR saturated)
-                if peak >= TARGET_LOW:
-                    if peak >= SAT_THRESH:
-                        print(f"⚠️ {lwl} nm: Saturated peak {peak:.1f} at IT={it_ms:.1f} ms. Accepting.")
-                    else:
-                        print(f"✅ {lwl} nm: Good peak {peak:.1f} at IT={it_ms:.1f} ms")
+                # Check if peak is in target range (TARGET_LOW <= peak <= TARGET_HIGH)
+                if TARGET_LOW <= peak <= TARGET_HIGH:
+                    print(f"✅ {lwl} nm: Good peak {peak:.1f} at IT={it_ms:.1f} ms")
                     success = True
                     break # Success, exit loop
+                
+                # Also accept if saturated (like original script modification)
+                if peak >= SAT_THRESH:
+                    print(f"⚠️ {lwl} nm: Saturated peak {peak:.1f} at IT={it_ms:.1f} ms. Accepting.")
+                    success = True
+                    break
                 
                 # If we are here, the peak is too dim (peak < TARGET_LOW)
                 err = TARGET_MID - peak # Error will be positive
@@ -1886,7 +1935,7 @@ class SpectroApp(tk.Tk):
                 if adjust_iters > MAX_IT_ADJUST_ITERS:
                     break
 
-        return success, it_ms
+        return success, it_ms, peak
 
     def _update_measurement_plot(self, y: np.ndarray, lwl: str, it_ms: float, peak: float):
         """Update measurement plot (like characterization script live plot)."""
@@ -2003,7 +2052,9 @@ class SpectroApp(tk.Tk):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
                 print("🔬 Starting comprehensive analysis via perform_characterization...")
-                result = perform_characterization(df, sn, plots_folder, timestamp)
+                # Pass reference CSV path if available
+                reference_csv_path = getattr(self, 'reference_csv_path', None)
+                result = perform_characterization(df, sn, plots_folder, timestamp, reference_csv_path=reference_csv_path)
 
                 # Collect saved figure paths
                 plot_paths: List[str] = []

@@ -73,9 +73,9 @@ def build(app):
         app.laser_vars = {}
 
         # All lasers in ascending order
-        for tag in ["377", "405", "445", "488", "532", "640", "685"]:
+        for tag in ["377", "405", "445", "488", "532", "640", "685", "Hg_Ar"]:
             var = tk.BooleanVar(value=False)
-            label_text = f"{tag} nm"
+            label_text = tag if tag == "Hg_Ar" else f"{tag} nm"
             btn = ttk.Checkbutton(
                 right,
                 text=label_text,
